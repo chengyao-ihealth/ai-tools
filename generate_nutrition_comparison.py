@@ -62,7 +62,22 @@ def detect_new_fields_for_patient(patient_data, versions):
             if current_report[key] is not None and current_report[key] != '':
                 normalized_key = normalize_field_name(key)
                 if normalized_key not in prev_normalized_fields:
-                    new_fields_map[version].append(key)
+                    # 额外检查：避免将相同内容但格式不同的字段标记为新字段
+                    # 例如：'Prioritized Recommendations' vs '11. Prioritized Recommendations'
+                    is_truly_new = True
+                    
+                    # 检查是否是带编号的相同字段
+                    if normalized_key.startswith(('executive', 'data', 'macronutrient', 'meal', 'food', 'key', 'lab', 'prioritized', 'clinical')):
+                        # 检查前一版本是否有相同内容但不同格式的字段
+                        for prev_key in prev_report.keys():
+                            prev_normalized = normalize_field_name(prev_key)
+                            if (prev_normalized == normalized_key or 
+                                (prev_normalized.replace('_', '') == normalized_key.replace('_', ''))):
+                                is_truly_new = False
+                                break
+                    
+                    if is_truly_new:
+                        new_fields_map[version].append(key)
     
     return new_fields_map
 
@@ -452,6 +467,7 @@ def generate_html(data, output_file, input_file):
             'executive_summary': {{ icon: '📋', title: 'Executive Summary' }},
             'executivesummary': {{ icon: '📋', title: 'Executive Summary' }},
             'data_coverage': {{ icon: '📊', title: 'Data Coverage' }},
+            'datacoverage': {{ icon: '📊', title: 'Data Coverage' }},
             'ai_assessment_metadata': {{ icon: '🤖', title: 'AI Assessment Metadata' }},
             'positive_habits': {{ icon: '✅', title: 'Positive Habits' }},
             'improvement_areas': {{ icon: '🎯', title: 'Areas for Improvement' }},
@@ -461,16 +477,23 @@ def generate_html(data, output_file, input_file):
             'meal_pattern_labels': {{ icon: '🏷️', title: 'Meal Pattern Labels' }},
             'macronutrient_summary': {{ icon: '🍽️', title: 'Macronutrient Summary' }},
             'macronutrient_analysis': {{ icon: '🍽️', title: 'Macronutrient Analysis' }},
+            'macronutrientanalysis': {{ icon: '🍽️', title: 'Macronutrient Analysis' }},
             'meal_timing_patterns': {{ icon: '⏰', title: 'Meal Timing Patterns' }},
             'meal_timing_and_patterns': {{ icon: '⏰', title: 'Meal Timing and Patterns' }},
+            'mealtimingandpatterns': {{ icon: '⏰', title: 'Meal Timing and Patterns' }},
             'food_choices_analysis': {{ icon: '🥗', title: 'Food Choices Analysis' }},
+            'foodchoicesanalysis': {{ icon: '🥗', title: 'Food Choices Analysis' }},
             'key_nutrition_patterns': {{ icon: '📈', title: 'Key Nutrition Patterns' }},
+            'keynutritionpatterns': {{ icon: '📈', title: 'Key Nutrition Patterns' }},
             'lab_correlations': {{ icon: '🔬', title: 'Lab Correlations' }},
+            'labcorrelations': {{ icon: '🔬', title: 'Lab Correlations' }},
             'recommendations': {{ icon: '💡', title: 'Recommendations' }},
             'prioritized_recommendations': {{ icon: '💡', title: 'Prioritized Recommendations' }},
+            'prioritizedrecommendations': {{ icon: '💡', title: 'Prioritized Recommendations' }},
             'narrative_summary': {{ icon: '📝', title: 'Narrative Summary' }},
             'coaching_takeaway': {{ icon: '🎯', title: 'Coaching Takeaway' }},
-            'clinical_considerations': {{ icon: '⚕️', title: 'Clinical Considerations' }}
+            'clinical_considerations': {{ icon: '⚕️', title: 'Clinical Considerations' }},
+            'clinicalconsiderations': {{ icon: '⚕️', title: 'Clinical Considerations' }}
         }};
 
         // 获取新字段（从Python端预计算的数据）
