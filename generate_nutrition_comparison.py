@@ -83,13 +83,26 @@ def read_csv_versions(csv_file):
     # 按版本号排序
     api_response_cols.sort()
     
-    # 提取版本号
+    # 提取版本号和描述
     versions = []
+    version_descriptions = {}
     for col in api_response_cols:
         if col == 'api_response':
             versions.append('v0')
+            version_descriptions['v0'] = ''
         else:
-            version = col.replace('api_response_', '')
+            # 提取版本号和括号内的描述
+            version_part = col.replace('api_response_', '')
+            
+            # 检查是否有括号内容
+            if '(' in version_part and ')' in version_part:
+                version = version_part.split('(')[0]  # 提取括号前的版本号
+                description = version_part.split('(')[1].rstrip(')')  # 提取括号内的描述
+                version_descriptions[version] = description
+            else:
+                version = version_part
+                version_descriptions[version] = ''
+            
             versions.append(version)
     
     print(f"Found {len(versions)} versions: {', '.join(api_response_cols)}")
@@ -117,7 +130,7 @@ def read_csv_versions(csv_file):
             patient_data['new_fields'] = detect_new_fields_for_patient(patient_data, versions)
             patients_data.append(patient_data)
     
-    return {'patients': patients_data, 'versions': versions}
+    return {'patients': patients_data, 'versions': versions, 'version_descriptions': version_descriptions}
 
 
 def generate_html(data, output_file, input_file):
@@ -125,6 +138,7 @@ def generate_html(data, output_file, input_file):
     
     patients = data['patients']
     versions = data['versions']
+    version_descriptions = data['version_descriptions']
     
     if not patients:
         print("Error: No patient data available")
@@ -412,7 +426,8 @@ def generate_html(data, output_file, input_file):
             <h1 class="text-3xl font-bold mb-2" style="color: #1f2937;">
                 Nutrition Baseline Report Comparison
             </h1>
-            <p class="text-gray-600">动态渲染 + 完整样式 + 新功能高亮</p>
+            <p class="text-gray-600 mb-1">Compare AI-generated nutrition baseline assessment reports across different iterations</p>
+            <p class="text-gray-600">比较 AI 生成的营养基线评估报告的不同迭代版本</p>
             
             <!-- Patient Selector -->
             <div class="mt-6 pt-6 border-t" style="border-color: #d4b896;">
@@ -429,6 +444,7 @@ def generate_html(data, output_file, input_file):
     <script>
         const patientsData = {json.dumps(patients, ensure_ascii=False)};
         const versions = {json.dumps(versions)};
+        const versionDescriptions = {json.dumps(version_descriptions)};
 
         // 字段显示配置
         const fieldConfig = {{
@@ -734,10 +750,27 @@ def generate_html(data, output_file, input_file):
                 
                 const column = document.createElement('div');
                 column.className = 'report-column';
+                
+                // 获取版本描述和生成时间
+                const description = versionDescriptions[version] || '';
+                const generatedAt = versionData.generated_at || '';
+                
+                // 格式化时间显示
+                let timeDisplay = '';
+                if (generatedAt) {{
+                    try {{
+                        const date = new Date(generatedAt);
+                        timeDisplay = `<p class="text-xs opacity-75 mt-1">Generated: ${{date.toLocaleString()}}</p>`;
+                    }} catch (e) {{
+                        timeDisplay = `<p class="text-xs opacity-75 mt-1">Generated: ${{generatedAt}}</p>`;
+                    }}
+                }}
+                
                 column.innerHTML = `
                     <div class="version-header">
-                        <h2 class="text-xl font-bold mb-1">${{version.toUpperCase()}}</h2>
-                        <p class="text-sm opacity-90">Version ${{idx + 1}}</p>
+                        <h2 class="text-xl font-bold mb-1">Version ${{idx + 1}}</h2>
+                        ${{description ? `<p class="text-sm opacity-90">${{description}}</p>` : ''}}
+                        ${{timeDisplay}}
                     </div>
                     ${{renderReport(report, version, prompt, newFields, idx)}}
                 `;
@@ -775,6 +808,11 @@ def generate_html(data, output_file, input_file):
     <footer class="mt-8 text-center text-sm text-gray-500 border-t pt-4" style="border-color: #d4b896;">
         <p>🔒 <strong>HIPAA Notice</strong> - Contains patient health information | Restricted access only</p>
         <p class="mt-1">Handle all data according to HIPAA privacy and security standards</p>
+        
+        <!-- Author attribution in bottom left -->
+        <div class="mt-4 text-left">
+            <span class="text-xs text-gray-400">by Chengyao</span>
+        </div>
     </footer>
 </body>
 </html>
