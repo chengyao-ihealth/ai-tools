@@ -450,6 +450,7 @@ def generate_html(data, output_file, input_file):
         const fieldConfig = {{
             'summary': {{ icon: '📋', title: 'Executive Summary' }},
             'executive_summary': {{ icon: '📋', title: 'Executive Summary' }},
+            'executivesummary': {{ icon: '📋', title: 'Executive Summary' }},
             'data_coverage': {{ icon: '📊', title: 'Data Coverage' }},
             'ai_assessment_metadata': {{ icon: '🤖', title: 'AI Assessment Metadata' }},
             'positive_habits': {{ icon: '✅', title: 'Positive Habits' }},
@@ -834,8 +835,8 @@ def main():
     parser.add_argument(
         'input_file',
         nargs='?',
-        default='nutrition_baseline_dev_5.csv',
-        help='输入CSV文件路径（默认：nutrition_baseline_dev_5.csv）'
+        default='nutrition_baseline_prod_8.csv',
+        help='输入CSV文件路径（默认：nutrition_baseline_prod_8.csv）'
     )
     parser.add_argument(
         '-o', '--output',

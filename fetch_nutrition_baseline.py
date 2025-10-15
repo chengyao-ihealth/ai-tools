@@ -200,7 +200,7 @@ def main():
     parser.add_argument(
         'input_file',
         nargs='?',
-        default='nutrition_baseline_dev_5.csv',
+        default='nutrition_baseline_prod_8.csv',
         help='输入CSV文件路径（必须包含PatientId列，默认：nutrition_baseline_dev_5.csv）'
     )
     parser.add_argument(
