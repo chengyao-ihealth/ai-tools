@@ -426,13 +426,13 @@ def generate_html(data, output_file, input_file):
             <h1 class="text-3xl font-bold mb-2" style="color: #1f2937;">
                 Nutrition Baseline Report Comparison
             </h1>
-            <p class="text-gray-600 mb-1">Compare AI-generated nutrition baseline assessment reports across different iterations</p>
+            <p class="text-gray-600 mb-1">Compare AI-generated nutrition baseline assessment</p>
             <p class="text-gray-600">比较 AI 生成的营养基线评估报告的不同迭代版本</p>
             
             <!-- Patient Selector -->
             <div class="mt-6 pt-6 border-t" style="border-color: #d4b896;">
-                <label class="text-sm font-semibold" style="color: #1f2937;">Select Patient:</label>
-                <select id="patient-selector" class="ml-3 px-4 py-2 border rounded-lg" style="border-color: #d4b896;">
+                <label class="text-sm font-semibold block mb-2" style="color: #1f2937;">Select Patient:</label>
+                <select id="patient-selector" class="w-full md:w-auto px-4 py-2 border rounded-lg text-sm" style="border-color: #d4b896; min-width: 200px; max-width: 100%;">
                 </select>
             </div>
         </div>
