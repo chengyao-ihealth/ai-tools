@@ -301,9 +301,11 @@ def build_card_html(row, images_dir: Path) -> str:
     if img_names:
         for name in img_names:
             img_path = images_dir / name
-            data_uri = read_image_as_data_uri(img_path)
-            if data_uri:
-                img_tags.append(f'<img src="{data_uri}" alt="{html.escape(name)}" />')
+            # Use relative path instead of data URI / 使用相对路径而不是 data URI
+            if img_path.exists():
+                # Create relative path from images directory / 创建从 images 目录的相对路径
+                relative_path = f"{images_dir.name}/{name}"
+                img_tags.append(f'<img src="{html.escape(relative_path)}" alt="{html.escape(name)}" />')
             else:
                 img_tags.append(f'<div class="img-missing">缺失：{html.escape(name)}</div>')
     else:
@@ -446,7 +448,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Load images from specified directory based on CSV ImgName, display them, and convert JSON columns to natural language. / 根据 CSV 的 ImgName 在指定 images 目录加载图片，展示并把 JSON 列转为自然语言。"
     )
-    parser.add_argument("--csv", default="./foodlog_ai_analysis_img_name.csv", help="CSV file path (must contain columns: ImgName, MealTitle, Description, RD Comments, Insight, Ingredients) / CSV 文件路径（需包含列：ImgName, MealTitle, Description, RD Comments, Insight, Ingredients）")
+    parser.add_argument("--csv", default="./foodlog_ai_analysis_img_name_10.csv", help="CSV file path (must contain columns: ImgName, MealTitle, Description, RD Comments, Insight, Ingredients) / CSV 文件路径（需包含列：ImgName, MealTitle, Description, RD Comments, Insight, Ingredients）")
     parser.add_argument("--images", default="./images", help="Images directory (default: ./images) / 图片目录（默认 ./images）")
     parser.add_argument("--out", default="gallery.html", help="Output HTML filename (default: gallery.html) / 输出 HTML 文件名（默认 gallery.html）")
     parser.add_argument("--title", default="FoodLog Gallery", help="HTML page title / HTML 页面标题")

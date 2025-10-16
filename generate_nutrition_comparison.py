@@ -580,7 +580,29 @@ def generate_html(data, output_file, input_file):
             if (!Array.isArray(recommendations)) return '';
             
             return recommendations.map(rec => {{
-                // 支持首字母大写和小写的字段名
+                // 检查是否是优先级作为键的数据结构 (如: {{'High': 'recommendation text'}})
+                const priorityKeys = ['High', 'Medium', 'Low', 'high', 'medium', 'low'];
+                const foundPriority = priorityKeys.find(priority => rec.hasOwnProperty(priority));
+                
+                if (foundPriority) {{
+                    // 处理优先级作为键的数据结构
+                    const priority = foundPriority;
+                    const recommendation = rec[foundPriority];
+                    const priorityClass = `priority-${{priority.toLowerCase()}}`;
+                    const bgClass = `recommendation-${{priority.toLowerCase()}}`;
+                    
+                    return `
+                        <div class="${{bgClass}}">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                <div style="font-size: 0.875rem; color: #1f2937; font-weight: bold;">Recommendation</div>
+                                <span class="priority-badge ${{priorityClass}}">${{priority}}</span>
+                            </div>
+                            <div style="font-size: 0.875rem; color: #374151; margin-bottom: 4px;">${{recommendation}}</div>
+                        </div>
+                    `;
+                }}
+                
+                // 支持首字母大写和小写的字段名 (标准结构)
                 const priority = rec.Priority || rec.priority || 'Medium';
                 const recommendation = rec.Recommendation || rec.recommendation || '';
                 const rationale = rec.Rationale || rec.rationale || '';
@@ -649,9 +671,16 @@ def generate_html(data, output_file, input_file):
 
         // 渲染数组
         function renderArray(arr, key) {{
-            // 检查是否为recommendations字段（支持不同版本的字段名格式）
+            // 检查是否为recommendations字段（支持所有字段名格式变体）
             const normalizedKey = key.toLowerCase().replace(/^\\d+\\.\\s*/, '').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-            if (normalizedKey === 'prioritized_recommendations' || normalizedKey === 'recommendations') {{
+            
+            // 支持所有可能的字段名变体
+            const isRecommendationsField = normalizedKey === 'prioritized_recommendations' || 
+                                         normalizedKey === 'prioritizedrecommendations' ||
+                                         normalizedKey === 'recommendations' ||
+                                         key.toLowerCase().includes('prioritized') && key.toLowerCase().includes('recommendation');
+            
+            if (isRecommendationsField) {{
                 return renderRecommendations(arr);
             }}
             
@@ -703,7 +732,14 @@ def generate_html(data, output_file, input_file):
                 // 检查是否为AI Assessment Metadata（支持不同版本的字段名格式）
                 const normalizedKey = key.toLowerCase().replace(/^\\d+\\.\\s*/, '').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
                 if (normalizedKey === 'ai_assessment_metadata') return renderAIMetadata(value);
-                if (normalizedKey === 'prioritized_recommendations' || normalizedKey === 'recommendations') {{
+                
+                // 检查是否为recommendations字段（支持所有字段名格式变体）
+                const isRecommendationsField = normalizedKey === 'prioritized_recommendations' || 
+                                             normalizedKey === 'prioritizedrecommendations' ||
+                                             normalizedKey === 'recommendations' ||
+                                             key.toLowerCase().includes('prioritized') && key.toLowerCase().includes('recommendation');
+                
+                if (isRecommendationsField) {{
                     // 如果是单个对象，包装成数组
                     return renderRecommendations(Array.isArray(value) ? value : [value]);
                 }}
