@@ -580,20 +580,26 @@ def generate_html(data, output_file, input_file):
             if (!Array.isArray(recommendations)) return '';
             
             return recommendations.map(rec => {{
-                if (!rec.category && !rec.recommendation) return renderGenericObject(rec);
+                // 支持首字母大写和小写的字段名
+                const priority = rec.Priority || rec.priority || 'Medium';
+                const recommendation = rec.Recommendation || rec.recommendation || '';
+                const rationale = rec.Rationale || rec.rationale || '';
+                const category = rec.Category || rec.category || 'Recommendation';
                 
-                const priority = rec.priority || 'Medium';
+                // 如果没有找到任何推荐内容，使用通用对象渲染
+                if (!recommendation && !rec.category && !rec.recommendation) return renderGenericObject(rec);
+                
                 const priorityClass = `priority-${{priority.toLowerCase()}}`;
                 const bgClass = `recommendation-${{priority.toLowerCase()}}`;
                 
                 return `
                     <div class="${{bgClass}}">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                            <div style="font-size: 0.875rem; color: #1f2937; font-weight: bold;">${{rec.category || 'Recommendation'}}</div>
+                            <div style="font-size: 0.875rem; color: #1f2937; font-weight: bold;">${{category}}</div>
                             <span class="priority-badge ${{priorityClass}}">${{priority}}</span>
                         </div>
-                        ${{rec.recommendation ? `<div style="font-size: 0.875rem; color: #374151; margin-bottom: 4px;">${{rec.recommendation}}</div>` : ''}}
-                        ${{rec.rationale ? `<div style="font-size: 0.75rem; font-style: italic; color: #6b7280;">${{rec.rationale}}</div>` : ''}}
+                        ${{recommendation ? `<div style="font-size: 0.875rem; color: #374151; margin-bottom: 4px;">${{recommendation}}</div>` : ''}}
+                        ${{rationale ? `<div style="font-size: 0.75rem; font-style: italic; color: #6b7280;">${{rationale}}</div>` : ''}}
                     </div>
                 `;
             }}).join('');
