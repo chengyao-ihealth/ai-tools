@@ -1,8 +1,31 @@
-# show_foodlog_gallery.py
+# show_foodlog_gallery_flexible.py
 """
-FoodLog Gallery Generator
-Generate an HTML gallery from CSV food log data with images and formatted JSON fields.
-从 CSV 食物记录数据生成 HTML 画廊，包含图片和格式化的 JSON 字段。
+Flexible FoodLog Gallery Generator
+Generate an HTML gallery from CSV food log data with dynamic column support.
+灵活的CSV食物记录数据生成HTML画廊，支持动态列显示。
+
+This script automatically detects CSV columns and displays all available fields
+except for system columns (MemberId, FoodLogId). Only ImgName is required for images.
+
+这个脚本自动检测CSV列并显示所有可用字段（除了系统列MemberId, FoodLogId）。
+只有ImgName是必需的，用于显示图片。
+
+Features / 功能特性:
+- Dynamic column detection and display / 动态列检测和显示
+- Automatic JSON formatting for complex fields / 复杂字段的自动JSON格式化
+- Backward compatibility with existing CSV formats / 与现有CSV格式的向后兼容
+- Flexible image handling / 灵活的图片处理
+- Self-contained HTML output / 自包含HTML输出
+
+Usage / 使用方法:
+    python show_foodlog_gallery_flexible.py --csv your_data.csv --images ./images --out gallery.html --open
+
+Required CSV columns / 必需的CSV列:
+- ImgName: Image filenames (can be multiple, separated by semicolon) / 图片文件名（可多个，用分号分隔）
+
+Optional columns / 可选列:
+- Any other columns will be automatically displayed / 任何其他列都会自动显示
+- System columns (MemberId, FoodLogId) are excluded / 系统列（MemberId, FoodLogId）被排除
 """
 import argparse
 import base64
@@ -12,7 +35,7 @@ import sys
 import html
 import webbrowser
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Dict, List
 
 import pandas as pd
 
@@ -21,6 +44,18 @@ def looks_like_json(s: str) -> bool:
     """
     Check if a string looks like JSON (starts with { or [ and ends with } or ]).
     检查字符串是否看起来像 JSON（以 { 或 [ 开头，以 } 或 ] 结尾）。
+    
+    This is a simple heuristic to determine if a string might be JSON data
+    before attempting to parse it with json.loads().
+    
+    这是一个简单的启发式方法，用于在尝试用json.loads()解析之前
+    判断字符串是否可能是JSON数据。
+    
+    Args:
+        s (str): The string to check / 要检查的字符串
+        
+    Returns:
+        bool: True if string looks like JSON / 如果字符串看起来像JSON则返回True
     """
     s = s.strip()
     return (s.startswith("{") and s.endswith("}")) or (s.startswith("[") and s.endswith("]"))
@@ -30,9 +65,24 @@ def humanize_json(obj: Any, *, indent_level: int = 0) -> str:
     """
     Convert dict/list/primitive types to natural language string.
     将字典/列表/原子类型转为自然语言字符串。
-    - dict: "key: value" for each item / 逐项 "键：值"
-    - list: comma separated; if contains dict, show as multi-line items / 逗号分隔；若包含 dict，则转为分行的项目列表
-    - other: convert to str / 其他: 直接转 str
+    
+    This function recursively converts JSON objects into human-readable text format.
+    It handles nested structures and provides proper indentation for readability.
+    
+    这个函数递归地将JSON对象转换为人类可读的文本格式。
+    它处理嵌套结构并提供适当的缩进以提高可读性。
+    
+    Args:
+        obj (Any): The object to convert (dict, list, or primitive) / 要转换的对象（字典、列表或原始类型）
+        indent_level (int): Current indentation level for nested structures / 嵌套结构的当前缩进级别
+        
+    Returns:
+        str: Human-readable text representation / 人类可读的文本表示
+        
+    Examples / 示例:
+        - dict: "key: value" for each item / 逐项 "键：值"
+        - list: comma separated; if contains dict, show as multi-line items / 逗号分隔；若包含 dict，则转为分行的项目列表
+        - other: convert to str / 其他: 直接转 str
     """
     indent = "  " * indent_level
     if obj is None:
@@ -68,11 +118,87 @@ def humanize_json(obj: Any, *, indent_level: int = 0) -> str:
     return str(obj)
 
 
+def format_field_value(value: Any, field_name: str) -> str:
+    """
+    Format a field value based on its content and field name.
+    根据字段内容和字段名称格式化字段值。
+    
+    This function provides intelligent formatting for different types of data:
+    - JSON strings are parsed and humanized
+    - Special field names get custom formatting
+    - Regular text is returned as-is
+    
+    这个函数为不同类型的数据提供智能格式化：
+    - JSON字符串被解析并人性化
+    - 特殊字段名称获得自定义格式化
+    - 常规文本原样返回
+    
+    Args:
+        value (Any): The field value to format / 要格式化的字段值
+        field_name (str): The name of the field / 字段名称
+        
+    Returns:
+        str: Formatted field value / 格式化的字段值
+    """
+    if value is None:
+        return ""
+    
+    # Convert to string if not already
+    if not isinstance(value, str):
+        value = str(value)
+    
+    value = value.strip()
+    if not value:
+        return ""
+    
+    # Special handling for known field types
+    # 对已知字段类型的特殊处理
+    if field_name.lower() in ['rd comments', 'rd_comments']:
+        return format_rd_comments(value)
+    elif field_name.lower() in ['ingredients']:
+        return format_ingredients(value)
+    elif field_name.lower() in ['aiinsight', 'insight']:
+        return value  # Keep as-is for insights
+    elif field_name.lower() in ['aititle', 'mealtitle']:
+        return value  # Keep as-is for titles
+    elif field_name.lower() in ['description']:
+        return value  # Keep as-is for descriptions
+    
+    # Check if it looks like JSON and try to parse
+    # 检查是否看起来像JSON并尝试解析
+    if looks_like_json(value):
+        try:
+            obj = json.loads(value)
+            return humanize_json(obj)
+        except Exception:
+            # If JSON parsing fails, return as-is
+            # 如果JSON解析失败，原样返回
+            return value
+    
+    return value
+
+
 def format_rd_comments(s: Any) -> str:
     """
     Format RD Comments to show only 'text' and 'commentedAt' fields.
     格式化 RD Comments，只显示 'text' 和 'commentedAt' 字段。
-    Format: Comment: {text}\nTime: {commentedAt}
+    
+    This function specifically handles the RD Comments field which contains nutritionist
+    feedback in JSON format. It extracts only the essential information (comment text
+    and timestamp) and formats it in a readable way.
+    
+    这个函数专门处理RD Comments字段，该字段包含营养师反馈的JSON格式数据。
+    它只提取关键信息（评论文本和时间戳）并以可读的方式格式化。
+    
+    Args:
+        s (Any): RD Comments data (can be JSON string, dict, list, or plain text) / RD评论数据（可以是JSON字符串、字典、列表或纯文本）
+        
+    Returns:
+        str: Formatted comment text with timestamps / 格式化的评论文本和时间戳
+        
+    Format / 格式:
+        Comment: {text}
+        Time: {commentedAt}
     """
     if s is None:
         return ""
@@ -127,12 +253,26 @@ def format_ingredients(s: Any) -> str:
     """
     Format Ingredients with structured display format.
     格式化 Ingredients 为结构化显示格式。
-    Format:
-    **1. {name}** (bold / 加粗)
-    Estimated Portion: {estimatedPortion}
-    Nutrition:
-    - {NUTRITION}: {gram}g
-    kcalPer100g: {kcalPer100g}
+    
+    This function handles the Ingredients field which contains detailed information
+    about food ingredients including names, portions, nutrition facts, and calories.
+    It creates a structured, readable format with proper HTML formatting.
+    
+    这个函数处理Ingredients字段，该字段包含食材的详细信息，
+    包括名称、分量、营养信息和卡路里。它创建结构化的、可读的格式，并包含适当的HTML格式。
+    
+    Args:
+        s (Any): Ingredients data (can be JSON string, dict, list, or plain text) / 食材数据（可以是JSON字符串、字典、列表或纯文本）
+        
+    Returns:
+        str: Formatted ingredients with HTML tags for styling / 格式化的食材信息，包含HTML标签用于样式
+        
+    Format / 格式:
+        **1. {name}** (bold / 加粗)
+        Estimated Portion: {estimatedPortion}
+        Nutrition:
+        - {NUTRITION}: {gram}g
+        kcalPer100g: {kcalPer100g}
     """
     if s is None:
         return ""
@@ -230,36 +370,30 @@ def format_ingredients(s: Any) -> str:
     return str(obj)
 
 
-def json_to_text(s: Any) -> str:
-    """
-    Convert input (JSON string, parsed object, or plain string) to natural language text.
-    输入可能是 JSON 字符串、已解析对象或普通字符串。
-    Returns natural language text (no HTML tags).
-    返回自然语言文本（不含 HTML 标签）。
-    """
-    if s is None:
-        return ""
-    if isinstance(s, (dict, list)):
-        return humanize_json(s)
-    if isinstance(s, str):
-        s_strip = s.strip()
-        if not s_strip:
-            return ""
-        if looks_like_json(s_strip):
-            try:
-                obj = json.loads(s_strip)
-                return humanize_json(obj)
-            except Exception:
-                # Not valid JSON, return as-is / 不是合法 JSON，就原样返回
-                return s_strip
-        return s_strip
-    return str(s)
-
-
 def read_image_as_data_uri(img_path: Path) -> str:
     """
     Convert local image to data URI (self-contained HTML, no file path dependencies).
     将本地图片转为 data URI（这样生成的 HTML 是自包含的，不依赖文件路径）。
+    
+    This function reads an image file from the local filesystem and converts it to a
+    base64-encoded data URI. This allows the generated HTML to be completely self-contained
+    without requiring external image files.
+    
+    这个函数从本地文件系统读取图片文件并将其转换为base64编码的data URI。
+    这使得生成的HTML完全自包含，不需要外部图片文件。
+    
+    Args:
+        img_path (Path): Path to the image file / 图片文件路径
+        
+    Returns:
+        str: Data URI string (e.g., "data:image/jpeg;base64,...") or empty string if failed / 
+             Data URI字符串（例如："data:image/jpeg;base64,..."）或失败时返回空字符串
+        
+    Supported formats / 支持的格式:
+        - .jpg, .jpeg: image/jpeg
+        - .png: image/png  
+        - .gif: image/gif
+        - .webp: image/webp
     """
     try:
         ext = img_path.suffix.lower()
@@ -278,47 +412,113 @@ def read_image_as_data_uri(img_path: Path) -> str:
         return ""
 
 
-def build_card_html(row, images_dir: Path) -> str:
+def get_display_columns(df: pd.DataFrame) -> List[str]:
     """
-    Build HTML card for a single food log entry.
-    构建单个食物记录的 HTML 卡片。
+    Get the list of columns to display, excluding system columns.
+    获取要显示的列列表，排除系统列。
+    
+    Args:
+        df (pd.DataFrame): The DataFrame to analyze / 要分析的DataFrame
+        
+    Returns:
+        List[str]: List of column names to display / 要显示的列名列表
     """
-    meal_title = str(row.get("MealTitle", "") or "").strip()
-    description = str(row.get("Description", "") or "").strip()
-    insight = str(row.get("Insight", "") or "").strip()
-    # Use specialized formatters for RD Comments and Ingredients
-    # 对 RD Comments 和 Ingredients 使用专用格式化器
-    rd_comments = format_rd_comments(row.get("RD Comments", ""))
-    ingredients = format_ingredients(row.get("Ingredients", ""))
-    foodlog_id = str(row.get("FoodLogId", "") or "").strip()
+    # System columns to exclude from display
+    # 从显示中排除的系统列
+    system_columns = {'MemberId', 'FoodLogId'}
+    
+    # Get all columns except system ones
+    # 获取除系统列之外的所有列
+    display_columns = [col for col in df.columns if col not in system_columns]
+    
+    return display_columns
 
-    # Handle multiple images: ImgName can be "fid.jpg;fid_1.png"
-    # 处理多图：ImgName 可能是 "fid.jpg;fid_1.png"
+
+def build_card_html(row, images_dir: Path, display_columns: List[str]) -> str:
+    """
+    Build HTML card for a single food log entry with dynamic columns.
+    为单个食物记录构建HTML卡片，支持动态列。
+    
+    This function takes a single row from the CSV data and creates a complete HTML card
+    that displays all the food log information including images and all available fields.
+    
+    这个函数获取CSV数据中的单行记录，创建一个完整的HTML卡片，
+    显示所有食物记录信息，包括图片和所有可用字段。
+    
+    Args:
+        row: Pandas DataFrame row containing food log data / 包含食物记录数据的Pandas DataFrame行
+        images_dir (Path): Directory containing the image files / 包含图片文件的目录
+        display_columns (List[str]): List of columns to display / 要显示的列列表
+        
+    Returns:
+        str: Complete HTML card markup / 完整的HTML卡片标记
+    """
+    # Handle images first (ImgName is required)
+    # 首先处理图片（ImgName是必需的）
     raw_imgnames = str(row.get("ImgName", "") or "").strip()
     img_names: Iterable[str] = [x.strip() for x in raw_imgnames.split(";") if x.strip()] if raw_imgnames else []
 
+    # Process each image: convert to data URI or show missing placeholder
+    # 处理每张图片：转换为data URI或显示缺失占位符
     img_tags = []
     if img_names:
         for name in img_names:
             img_path = images_dir / name
             data_uri = read_image_as_data_uri(img_path)
             if data_uri:
+                # Successfully loaded image, create img tag with data URI
+                # 成功加载图片，创建带data URI的img标签
                 img_tags.append(f'<img src="{data_uri}" alt="{html.escape(name)}" />')
             else:
+                # Image file not found or failed to load, show missing placeholder
+                # 图片文件未找到或加载失败，显示缺失占位符
                 img_tags.append(f'<div class="img-missing">缺失：{html.escape(name)}</div>')
     else:
+        # No image names provided in CSV
+        # CSV中未提供图片名称
         img_tags.append('<div class="img-missing">未提供图片文件名</div>')
 
     def para(label: str, text: str, escape_html: bool = True) -> str:
-        """Helper to create a field div with label and value."""
+        """
+        Helper to create a field div with label and value.
+        创建带标签和值的字段div的辅助函数。
+        
+        Args:
+            label (str): Field label / 字段标签
+            text (str): Field value / 字段值
+            escape_html (bool): Whether to escape HTML in the value / 是否转义值中的HTML
+            
+        Returns:
+            str: HTML div element / HTML div元素
+        """
         if not text:
             return ""
         if escape_html:
+            # Escape HTML characters and convert newlines to <br/> tags
+            # 转义HTML字符并将换行符转换为<br/>标签
             safe = html.escape(text).replace("\n", "<br/>")
         else:
             # Don't escape HTML, but still convert newlines to <br/>
+            # 不转义HTML，但仍将换行符转换为<br/>
             safe = text.replace("\n", "<br/>")
         return f'<div class="field"><div class="label">{html.escape(label)}</div><div class="value">{safe}</div></div>'
+
+    # Generate field HTML for all display columns
+    # 为所有显示列生成字段HTML
+    field_html = []
+    for col in display_columns:
+        if col == "ImgName":
+            continue  # Skip ImgName as it's handled separately
+        
+        value = row.get(col, "")
+        formatted_value = format_field_value(value, col)
+        
+        # Determine if this field should allow HTML (like Ingredients)
+        # 确定此字段是否应允许HTML（如Ingredients）
+        allow_html = col.lower() in ['ingredients']
+        
+        if formatted_value:
+            field_html.append(para(col, formatted_value, escape_html=not allow_html))
 
     return f"""
     <div class="card">
@@ -326,12 +526,7 @@ def build_card_html(row, images_dir: Path) -> str:
             {''.join(img_tags)}
         </div>
         <div class="meta">
-            {para("FoodLogId", foodlog_id)}
-            {para("MealTitle", meal_title)}
-            {para("Description", description)}
-            {para("Insight", insight)}
-            {para("RD Comments", rd_comments)}
-            {para("Ingredients", ingredients, escape_html=False)}
+            {''.join(field_html)}
         </div>
     </div>
     """
@@ -341,6 +536,26 @@ def build_html(doc_cards: str, title: str = "FoodLog Gallery") -> str:
     """
     Build complete HTML document with card grid layout.
     构建完整的 HTML 文档，使用卡片网格布局。
+    
+    This function creates a complete HTML document with modern CSS styling,
+    responsive grid layout, and all the food log cards embedded within it.
+    
+    这个函数创建一个完整的HTML文档，包含现代化CSS样式、
+    响应式网格布局，以及嵌入其中的所有食物记录卡片。
+    
+    Args:
+        doc_cards (str): HTML content for all food log cards / 所有食物记录卡片的HTML内容
+        title (str): Page title / 页面标题
+        
+    Returns:
+        str: Complete HTML document / 完整的HTML文档
+        
+    Features / 功能特性:
+        - Responsive grid layout / 响应式网格布局
+        - Modern CSS with CSS variables / 使用CSS变量的现代化CSS
+        - Light theme with clean design / 简洁设计的浅色主题
+        - Mobile-friendly / 移动端友好
+        - Self-contained (no external dependencies) / 自包含（无外部依赖）
     """
     # Simple card grid style / 简单的卡片网格样式
     return f"""<!DOCTYPE html>
@@ -427,12 +642,12 @@ h1 {{
 <body>
   <div class="header">
     <h1>{html.escape(title)}</h1>
-    <div class="hint">by Chengyao</div>
+    <div class="hint">by Chengyao - Flexible Version</div>
   </div>
   <div class="grid">
   {doc_cards}
   </div>
-  <div class="footer">Tip：若图片过多，可在浏览器中使用搜索（⌘/Ctrl+F）按 MealTitle 或 FoodLogId 快速定位。</div>
+  <div class="footer">Tip：若图片过多，可在浏览器中使用搜索（⌘/Ctrl+F）按字段内容快速定位。</div>
 </body>
 </html>
 """
@@ -444,16 +659,16 @@ def main():
     主函数，从 CSV 食物记录数据生成 HTML 画廊。
     """
     parser = argparse.ArgumentParser(
-        description="Load images from specified directory based on CSV ImgName, display them, and convert JSON columns to natural language. / 根据 CSV 的 ImgName 在指定 images 目录加载图片，展示并把 JSON 列转为自然语言。"
+        description="Load images from specified directory based on CSV ImgName, display them, and convert JSON columns to natural language. Supports dynamic column detection. / 根据 CSV 的 ImgName 在指定 images 目录加载图片，展示并把 JSON 列转为自然语言。支持动态列检测。"
     )
-    parser.add_argument("--csv", default="./foodlog_ai_analysis_img_name.csv", help="CSV file path (must contain columns: ImgName, MealTitle, Description, RD Comments, Insight, Ingredients) / CSV 文件路径（需包含列：ImgName, MealTitle, Description, RD Comments, Insight, Ingredients）")
+    parser.add_argument("csv_file", nargs='?', default="./foodlog_ai_analysis_img_name.csv", help="CSV file path (must contain ImgName column) / CSV 文件路径（必须包含ImgName列）")
     parser.add_argument("--images", default="./images", help="Images directory (default: ./images) / 图片目录（默认 ./images）")
-    parser.add_argument("--out", default="gallery.html", help="Output HTML filename (default: gallery.html) / 输出 HTML 文件名（默认 gallery.html）")
-    parser.add_argument("--title", default="FoodLog Gallery", help="HTML page title / HTML 页面标题")
+    parser.add_argument("--out", default="gallery_flexible.html", help="Output HTML filename (default: gallery_flexible.html) / 输出 HTML 文件名（默认 gallery_flexible.html）")
+    parser.add_argument("--title", default="FoodLog Gallery - Flexible", help="HTML page title / HTML 页面标题")
     parser.add_argument("--open", action="store_true", help="Automatically open in default browser after generation / 生成后自动在默认浏览器打开")
     args = parser.parse_args()
 
-    csv_path = Path(args.csv)
+    csv_path = Path(args.csv_file)
     images_dir = Path(args.images)
     out_html = Path(args.out)
 
@@ -470,18 +685,21 @@ def main():
         sys.exit(1)
 
     # Validate required columns / 校验必要列
-    needed_cols = ["ImgName", "MealTitle", "Description", "RD Comments", "Insight", "Ingredients"]
-    missing = [c for c in needed_cols if c not in df.columns]
-    if missing:
-        print(f"[ERROR] Missing columns / 缺少列：{missing}", file=sys.stderr)
+    if "ImgName" not in df.columns:
+        print(f"[ERROR] Missing required column: ImgName / 缺少必需列：ImgName", file=sys.stderr)
         sys.exit(1)
+
+    # Get display columns (exclude system columns)
+    # 获取显示列（排除系统列）
+    display_columns = get_display_columns(df)
+    print(f"[INFO] Display columns / 显示列：{display_columns}")
 
     # Generate all cards / 生成所有卡片
     cards_html = []
     total = len(df)
     for _, row in df.iterrows():
         try:
-            cards_html.append(build_card_html(row, images_dir))
+            cards_html.append(build_card_html(row, images_dir, display_columns))
         except Exception as e:
             # Continue even if single record fails / 即使单条失败也不中断
             print(f"[WARN] Failed to render a record / 渲染某条记录失败：{e}", file=sys.stderr)

@@ -91,12 +91,14 @@ if __name__ == "__main__":
     # token = os.environ.get("SESSION_TOKEN", "").strip()
 
     # Can get it from https://portal.ihealthunifiedcare.com/care-portal/home -> inspect -> application -> session storage -> https://portal.ihealth-eng.com -> token
-    token = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzZXNzaW9uSWQiOiJlZmRlMDcwYzk1MGM5Y2VjY2Q0MDk0YjhkNDMxNjhhYzdhMWIzNGYxZjUwYWU0MGVkOTY3Y2FiYjRlM2JjZmNhIiwidXNlclR5cGUiOiJFTVBMT1lFRSIsImV4cCI6MTc1OTYwODUyNCwidXNlcklkIjoiNjhlMDEwYmRkYTlmYmE2NjU1OWY2NDVjIiwiaWF0IjoxNzU5NTIyMTI0LCJlbWFpbCI6ImNoZW5neWFvLnNoZW5AaWhlYWx0aGxhYnMuY29tIn0.clD0fH8tdpDcNevcjBU_CYPYh3zEr0rXzD0c8Lut39E"
+    # token = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzZXNzaW9uSWQiOiJlZmRlMDcwYzk1MGM5Y2VjY2Q0MDk0YjhkNDMxNjhhYzdhMWIzNGYxZjUwYWU0MGVkOTY3Y2FiYjRlM2JjZmNhIiwidXNlclR5cGUiOiJFTVBMT1lFRSIsImV4cCI6MTc1OTYwODUyNCwidXNlcklkIjoiNjhlMDEwYmRkYTlmYmE2NjU1OWY2NDVjIiwiaWF0IjoxNzU5NTIyMTI0LCJlbWFpbCI6ImNoZW5neWFvLnNoZW5AaWhlYWx0aGxhYnMuY29tIn0.clD0fH8tdpDcNevcjBU_CYPYh3zEr0rXzD0c8Lut39E"
+    token = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzZXNzaW9uSWQiOiIxYjMzMDVhMWNkYzMwN2Q3MjlmYzA1NjA5MDE3YWY1NDU1ZjIyMjZmMDEwMGI1NzQ2OTgyOWNkOTUwOTIwYmJiIiwidXNlclR5cGUiOiJFTVBMT1lFRSIsImV4cCI6MTc2MTMzOTY3NCwidXNlcklkIjoiNjhlMDEwYmRkYTlmYmE2NjU1OWY2NDVjIiwiaWF0IjoxNzYxMjUzMjc0LCJlbWFpbCI6ImNoZW5neWFvLnNoZW5AaWhlYWx0aGxhYnMuY29tIn0.A8Lx0HQWio6JTf9V8GzJgrfyD2kOFVvb7biLb2XDknE"
     if not token:
         raise RuntimeError("Please set SESSION_TOKEN environment variable first, or modify the code to directly enter the token")
 
     # Modify to your CSV path
-    csv_path = "foodlog_ai_analysis_img_name.csv"
+    # csv_path = "foodlog_ai_analysis_img_name.csv"
+    csv_path = "foodlog_ai_analysis_v2.csv"
     out_dir = "./images"
 
     main(csv_path, out_dir, token)
