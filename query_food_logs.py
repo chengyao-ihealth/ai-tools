@@ -249,7 +249,104 @@ def query_food_logs(
     if "_id" in df.columns:
         df["_id"] = df["_id"].astype(str)
     
+    # Filter out records with empty images (invalid food logs)
+    # 过滤掉images为空的记录（无效的food log）
+    if "images" in df.columns:
+        initial_count = len(df)
+        # Filter: keep only records where images is not null/None and not empty list
+        # 过滤：只保留images不为null/None且不为空列表的记录
+        def has_valid_images(x):
+            try:
+                # Check for None
+                # 检查None
+                if x is None:
+                    return False
+                # Check for NaN (scalar values only)
+                # 检查NaN（仅标量值）
+                try:
+                    if pd.isna(x):
+                        return False
+                except (TypeError, ValueError):
+                    # pd.isna() may fail for list types, which is fine
+                    # pd.isna()对于列表类型可能会失败，这是正常的
+                    pass
+                # Check if it's a non-empty list
+                # 检查是否是非空列表
+                if isinstance(x, list):
+                    return len(x) > 0
+                return False
+            except (TypeError, ValueError):
+                return False
+        
+        df = df[df["images"].apply(has_valid_images)]
+        filtered_count = initial_count - len(df)
+        if filtered_count > 0:
+            print(f"[INFO] Filtered out {filtered_count} records with empty images / 过滤掉 {filtered_count} 条images为空的记录")
+    elif len(df) > 0:
+        # If images column doesn't exist, warn but don't filter
+        # 如果images列不存在，警告但不过滤
+        print(f"[WARN] 'images' column not found in food_logs / 在food_logs中未找到'images'列")
+    
     return df
+
+
+def count_total_valid_food_logs(
+    client: Any,
+    database_name: str = "UnifiedCare",
+) -> int:
+    """
+    Count total valid food logs (with non-empty images) in database.
+    统计数据库中所有有效的food log总数（images不为空的）。
+    
+    Args:
+        client: MongoDB client / MongoDB客户端
+        database_name: Database name / 数据库名称
+        
+    Returns:
+        int: Total count of valid food logs / 有效food log总数
+    """
+    db = client[database_name]
+    collection = db["food_logs"]
+    
+    try:
+        # Count documents where images exists and is not empty
+        # 统计images存在且不为空的文档数
+        # Using aggregation to check for non-empty images array
+        # 使用聚合管道检查非空images数组
+        pipeline = [
+            {
+                "$match": {
+                    "images": {"$exists": True, "$ne": None}
+                }
+            },
+            {
+                "$addFields": {
+                    "has_images": {
+                        "$cond": {
+                            "if": {"$isArray": "$images"},
+                            "then": {"$gt": [{"$size": "$images"}, 0]},
+                            "else": False
+                        }
+                    }
+                }
+            },
+            {
+                "$match": {
+                    "has_images": True
+                }
+            },
+            {
+                "$count": "total"
+            }
+        ]
+        
+        result = list(collection.aggregate(pipeline))
+        if result and len(result) > 0:
+            return result[0].get("total", 0)
+        return 0
+    except Exception as e:
+        print(f"[WARN] Failed to count total valid food_logs / 统计总有效food_logs失败: {e}")
+        return 0
 
 
 def main():
@@ -334,8 +431,10 @@ def main():
     
     # Get patient IDs
     # 获取病人ID
+    total_enrolled_patients = 0
     if args.patient_ids:
         patient_ids = [pid.strip() for pid in args.patient_ids.split(",")]
+        total_enrolled_patients = len(patient_ids)
         print(f"[INFO] Using provided patient IDs / 使用提供的病人ID: {len(patient_ids)} patients")
     else:
         print(f"[INFO] Fetching patient IDs from uc_enrolled_programs... / 正在从uc_enrolled_programs获取病人ID...")
@@ -345,6 +444,7 @@ def main():
                 database_name=args.database,
                 limit=args.limit_patients
             )
+            total_enrolled_patients = len(patient_ids)
             print(f"[OK] Found {len(patient_ids)} patients / 找到 {len(patient_ids)} 个病人")
         except Exception as e:
             print(f"[ERROR] Failed to fetch patient IDs / 获取病人ID失败: {e}", file=sys.stderr)
@@ -391,8 +491,9 @@ def main():
         print(f"[OK] Found {len(df)} food log entries / 找到 {len(df)} 条食物记录")
         
         if len(df) > 0:
-            print(f"\n[INFO] Summary / 摘要:")
-            print(f"  - Total entries / 总记录数: {len(df)}")
+            # Count total valid food logs in database
+            # 统计数据库中所有有效的food log总数
+            total_valid_food_logs = count_total_valid_food_logs(client, database_name=args.database)
             
             # Check for patient ID column (could be memberId or patient_id)
             # 检查病人ID列（可能是memberId或patient_id）
@@ -402,8 +503,9 @@ def main():
                     patient_col = col
                     break
             
+            unique_patients_in_query = 0
             if patient_col:
-                print(f"  - Unique patients / 唯一病人数: {df[patient_col].nunique()}")
+                unique_patients_in_query = df[patient_col].nunique()
             
             # Check for date columns
             # 检查日期列
@@ -413,17 +515,32 @@ def main():
                     date_col = col
                     break
             
+            print(f"\n[INFO] Summary / 摘要:")
+            print(f"  - Valid food logs / 有效食物记录数: {len(df)}")
+            print(f"  - Patients with food logs / 有食物记录的病人数: {unique_patients_in_query}")
+            print(f"  - Total valid food logs / 总有效食物记录数: {total_valid_food_logs}")
+            print(f"  - Total enrolled patients / 总注册病人数: {total_enrolled_patients}")
             if date_col:
                 print(f"  - Date range / 日期范围: {df[date_col].min()} to {df[date_col].max()}")
             
-            # Show available columns
-            # 显示可用列
-            print(f"  - Available columns / 可用列: {', '.join(df.columns.tolist()[:10])}")
-            if len(df.columns) > 10:
-                print(f"    ... and {len(df.columns) - 10} more / ... 还有 {len(df.columns) - 10} 列")
-            
             if not args.no_export:
                 output_path = Path(args.output)
+                # Reorder columns: images should be in the 3rd position (index 2)
+                # 重新排列列：images应该在第三位（索引2）
+                if "images" in df.columns:
+                    cols = df.columns.tolist()
+                    # Remove images from current position
+                    # 从当前位置移除images
+                    cols.remove("images")
+                    # Insert images at 3rd position (index 2)
+                    # 将images插入到第三位（索引2）
+                    if len(cols) >= 2:
+                        cols.insert(2, "images")
+                    else:
+                        # If less than 2 columns, just append
+                        # 如果少于2列，直接追加
+                        cols.append("images")
+                    df = df[cols]
                 df.to_csv(output_path, index=False, encoding="utf-8")
                 print(f"\n[OK] Exported to / 已导出到: {output_path.resolve()}")
         else:
