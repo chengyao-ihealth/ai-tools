@@ -158,10 +158,14 @@ def get_patient_info(client: MongoClient, patient_id: str, database_name: str = 
     return patient_info
 
 
-def extract_image_links_from_row(row: pd.Series) -> List[str]:
+def extract_image_links_from_row(row: pd.Series, s3_base_url: Optional[str] = None) -> List[str]:
     """
     Extract image links from food log row.
     从食物日志行提取图片链接。
+    
+    Args:
+        row: Food log row
+        s3_base_url: Base URL for S3/fileKey images (e.g., "https://s3.amazonaws.com/bucket" or API endpoint)
     
     Returns:
         List of image URLs
@@ -170,18 +174,50 @@ def extract_image_links_from_row(row: pd.Series) -> List[str]:
     
     # Try images field first (from MongoDB)
     images_data = row.get("images")
-    if images_data is not None and not pd.isna(images_data):
+    if images_data is not None:
+        # Handle pandas NaN
+        try:
+            if pd.isna(images_data):
+                return links
+        except (TypeError, ValueError):
+            # pd.isna might fail for list/dict types, continue
+            pass
+        
         if isinstance(images_data, list):
             for item in images_data:
                 if isinstance(item, dict):
-                    # Could be {"link": "url"} or {"url": "url"}
-                    link = item.get("link") or item.get("url") or item.get("src")
+                    # Try different possible keys
+                    link = (item.get("link") or 
+                           item.get("url") or 
+                           item.get("src") or 
+                           item.get("fileUrl") or
+                           item.get("imageUrl"))
+                    
+                    # If no direct URL, try fileKey (S3 key)
+                    if not link and item.get("fileKey"):
+                        file_key = item.get("fileKey")
+                        # Return fileKey as-is, download function will handle URL construction
+                        link = file_key
+                    
                     if link:
                         links.append(str(link))
                 elif isinstance(item, str):
                     links.append(item)
         elif isinstance(images_data, dict):
-            link = images_data.get("link") or images_data.get("url") or images_data.get("src")
+            link = (images_data.get("link") or 
+                   images_data.get("url") or 
+                   images_data.get("src") or
+                   images_data.get("fileUrl") or
+                   images_data.get("imageUrl"))
+            
+            # Try fileKey
+            if not link and images_data.get("fileKey"):
+                file_key = images_data.get("fileKey")
+                if s3_base_url:
+                    link = f"{s3_base_url.rstrip('/')}/{file_key.lstrip('/')}"
+                else:
+                    link = file_key
+            
             if link:
                 links.append(str(link))
         elif isinstance(images_data, str):
@@ -242,34 +278,40 @@ def download_food_log_images(
             # Try to extract links from images field first
             links = extract_image_links_from_row(row)
             
-            # If no links found and session token is available, try API
-            if not links and session_token:
+            # Check if we have fileKey-style links (not full HTTP URLs)
+            has_filekey_only = links and all(not link.startswith('http') for link in links)
+            
+            # If no links found, or we only have fileKey links, use API to get full URLs
+            # This is the method from download_images.py - call API to get full image URLs
+            if (not links or has_filekey_only) and session_token:
                 url = f"{API_BASE}/{fid}"
                 try:
                     resp = client.get(url, headers=make_headers(session_token))
                     resp.raise_for_status()
                     payload = resp.json()
-                    links = extract_links(payload)
+                    # Use extract_links function (same as download_images.py)
+                    api_links = extract_links(payload)
+                    if api_links:
+                        # These are full HTTP URLs from API, use them directly
+                        links = api_links
+                        print(f"[DEBUG] Got {len(links)} image URL(s) from API for {fid}")
+                    else:
+                        print(f"[WARN] No image links found in API response for {fid}")
                 except Exception as e:
                     print(f"[WARN] Failed to fetch food log {fid} from API: {e}")
             
-            # Download images
-            saved_files = []
-            for i, link in enumerate(links):
-                try:
-                    img_resp = client.get(link, timeout=15)
-                    if img_resp.status_code == 200:
-                        ext = guess_ext_from_url(link)
-                        fname = f"{fid}_{i}{ext}" if len(links) > 1 else f"{fid}{ext}"
-                        fpath = images_dir / fname
-                        fpath.write_bytes(img_resp.content)
-                        saved_files.append(fname)
-                except Exception as e:
-                    print(f"[WARN] Failed to download image {link}: {e}")
+            # Filter to only keep HTTP URLs (remove any non-URL entries like fileKey)
+            if links:
+                links = [link for link in links if link.startswith('http://') or link.startswith('https://')]
             
-            if saved_files:
-                food_logs_df.at[idx, "ImgName"] = ";".join(saved_files)
-                print(f"[OK] Downloaded {len(saved_files)} image(s) for {fid}")
+            # Store image URLs directly (don't download to local)
+            # We'll use these URLs directly in HTML
+            if links:
+                # Store full URLs in ImgName column (semicolon-separated for multiple images)
+                food_logs_df.at[idx, "ImgName"] = ";".join(links)
+                # Also store as list for easier access in HTML generation
+                food_logs_df.at[idx, "ImageURLs"] = links
+                print(f"[OK] Got {len(links)} image URL(s) for {fid} (using directly, not downloading)")
     
     return food_logs_df
 
@@ -487,41 +529,54 @@ def generate_html_summary(
         all_notes = []
         
         for row in food_logs_by_meal[meal_type]:
-            # Collect images
-            img_names_str = str(row.get("ImgName", "") or "").strip()
-            img_names = [x.strip() for x in img_names_str.split(";") if x.strip()] if img_names_str else []
-            for img_name in img_names:
-                img_path = images_dir / img_name
-                if img_path.exists():
-                    if use_data_uri:
-                        # Convert to data URI for embedding in HTML
-                        try:
-                            ext = img_path.suffix.lower()
-                            mime = {
-                                ".jpg": "image/jpeg",
-                                ".jpeg": "image/jpeg",
-                                ".png": "image/png",
-                                ".gif": "image/gif",
-                                ".webp": "image/webp",
-                            }.get(ext, "image/jpeg")
-                            data = img_path.read_bytes()
-                            b64 = base64.b64encode(data).decode("ascii")
-                            data_uri = f"data:{mime};base64,{b64}"
-                            meal_images.append(data_uri)
-                        except Exception as e:
-                            # If conversion fails, fall back to URL
-                            if image_base_url:
-                                meal_images.append(f"{image_base_url}/{img_name}")
-                            else:
-                                relative_path = f"{images_dir.name}/{img_name}"
-                                meal_images.append(relative_path)
+            # Collect images - check for ImageURLs first (direct URLs from API)
+            image_urls = row.get("ImageURLs")
+            if image_urls and isinstance(image_urls, list):
+                # Use direct URLs from API - no need to download
+                meal_images.extend(image_urls)
+            else:
+                # Fallback: check ImgName (might be URLs from API or local filenames)
+                img_names_str = str(row.get("ImgName", "") or "").strip()
+                img_items = [x.strip() for x in img_names_str.split(";") if x.strip()] if img_names_str else []
+                
+                for img_item in img_items:
+                    # Check if it's already a full URL (from API)
+                    if img_item.startswith('http://') or img_item.startswith('https://'):
+                        # Direct URL from API, use it directly
+                        meal_images.append(img_item)
                     else:
-                        # Use URL path
-                        if image_base_url:
-                            meal_images.append(f"{image_base_url}/{img_name}")
-                        else:
-                            relative_path = f"{images_dir.name}/{img_name}"
-                            meal_images.append(relative_path)
+                        # Local filename - only process if file exists (backward compatibility)
+                        img_path = images_dir / img_item
+                        if img_path.exists():
+                            if use_data_uri:
+                                # Convert to data URI for embedding in HTML
+                                try:
+                                    ext = img_path.suffix.lower()
+                                    mime = {
+                                        ".jpg": "image/jpeg",
+                                        ".jpeg": "image/jpeg",
+                                        ".png": "image/png",
+                                        ".gif": "image/gif",
+                                        ".webp": "image/webp",
+                                    }.get(ext, "image/jpeg")
+                                    data = img_path.read_bytes()
+                                    b64 = base64.b64encode(data).decode("ascii")
+                                    data_uri = f"data:{mime};base64,{b64}"
+                                    meal_images.append(data_uri)
+                                except Exception as e:
+                                    # If conversion fails, fall back to URL
+                                    if image_base_url:
+                                        meal_images.append(f"{image_base_url}/{img_item}")
+                                    else:
+                                        relative_path = f"{images_dir.name}/{img_item}"
+                                        meal_images.append(relative_path)
+                            else:
+                                # Use URL path
+                                if image_base_url:
+                                    meal_images.append(f"{image_base_url}/{img_item}")
+                                else:
+                                    relative_path = f"{images_dir.name}/{img_item}"
+                                    meal_images.append(relative_path)
             
             # Collect ingredients
             ingredients_data = row.get("Ingredients") or row.get("ingredients")
@@ -542,8 +597,9 @@ def generate_html_summary(
         # Display images
         if meal_images:
             food_log_html += '<div class="meal-images">'
-            for img_path in meal_images:
-                food_log_html += f'<img src="{html.escape(img_path)}" alt="Food image" />'
+            for img_url in meal_images:
+                # img_url can be either a direct HTTP URL or a data URI
+                food_log_html += f'<img src="{html.escape(img_url)}" alt="Food image" loading="lazy" />'
             food_log_html += '</div>'
         
         # Display ingredients

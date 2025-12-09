@@ -10,11 +10,19 @@ pip install pandas httpx requests pymongo python-dotenv
 
 ## Setup
 
-1. Copy `.env.example` to `.env` and fill in your database connection info:
+1. Copy `.env.example` to `.env` and fill in your credentials:
 ```bash
 cp .env.example .env
 # Edit .env with your credentials
 ```
+
+2. Required environment variables in `.env`:
+   - `MONGO_DATABASE_URI`: MongoDB connection string
+   - `SESSION_TOKEN`: Session token for API authentication (required for getting image URLs)
+     - Get it from: https://portal.ihealthunifiedcare.com/care-portal/home
+     - Open browser developer tools (F12)
+     - Go to Application → Session Storage → https://portal.ihealth-eng.com → token
+     - Copy the token value
 
 ## Usage
 
@@ -32,12 +40,16 @@ cp .env.example .env
 2. Run `python3 query_food_logs.py --days 30`
 
 **Generate Food Log Summary (Web Application)**
-1. Make sure `.env` file is configured with database connection info
+1. Make sure `.env` file is configured with:
+   - `MONGO_DATABASE_URI`: MongoDB connection string
+   - `SESSION_TOKEN`: Session token for API authentication (required for image URLs)
 2. Install Flask dependencies: `pip install flask flask-cors`
 3. Run `python3 food_log_summary_web.py`
 4. Open browser to `http://localhost:5000`
 5. Select patient ID and date, then click "生成总结" to generate the summary
 
 **Generate Food Log Summary (Command Line)**
-1. Make sure `.env` file is configured with database connection info
+1. Make sure `.env` file is configured with:
+   - `MONGO_DATABASE_URI`: MongoDB connection string
+   - `SESSION_TOKEN`: Session token for API authentication (required for image URLs)
 2. Run `python3 generate_food_log_summary.py --patient-id "PATIENT_ID" --date "2024-01-15"`

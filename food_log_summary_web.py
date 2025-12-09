@@ -579,10 +579,25 @@ def api_generate_summary():
                 # Sample food log (first row)
                 if not food_logs_df.empty:
                     sample_row = food_logs_df.iloc[0]
-                    debug_info["sample_food_log"] = {
-                        col: str(sample_row[col])[:200] if pd.notna(sample_row[col]) else None 
-                        for col in food_logs_df.columns
-                    }
+                    sample_data = {}
+                    for col in food_logs_df.columns:
+                        val = sample_row[col]
+                        # Handle different data types safely
+                        try:
+                            if pd.isna(val):
+                                sample_data[col] = None
+                            elif isinstance(val, (list, dict)):
+                                # Convert list/dict to JSON string for display
+                                sample_data[col] = json.dumps(val, ensure_ascii=False, default=str)[:500]
+                            else:
+                                sample_data[col] = str(val)[:200]
+                        except (TypeError, ValueError):
+                            # If conversion fails, try to stringify anyway
+                            try:
+                                sample_data[col] = str(val)[:200]
+                            except:
+                                sample_data[col] = f"<unable to convert type {type(val)}>"
+                    debug_info["sample_food_log"] = sample_data
                 
                 # Food logs by meal type
                 for meal_type, rows in food_logs_by_meal.items():
