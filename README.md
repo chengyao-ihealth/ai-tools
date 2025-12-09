@@ -30,3 +30,14 @@ cp .env.example .env
 **Query Food Logs from Database**
 1. Make sure `.env` file is configured with database connection info
 2. Run `python3 query_food_logs.py --days 30`
+
+**Generate Food Log Summary (Web Application)**
+1. Make sure `.env` file is configured with database connection info
+2. Install Flask dependencies: `pip install flask flask-cors`
+3. Run `python3 food_log_summary_web.py`
+4. Open browser to `http://localhost:5000`
+5. Select patient ID and date, then click "生成总结" to generate the summary
+
+**Generate Food Log Summary (Command Line)**
+1. Make sure `.env` file is configured with database connection info
+2. Run `python3 generate_food_log_summary.py --patient-id "PATIENT_ID" --date "2024-01-15"`
