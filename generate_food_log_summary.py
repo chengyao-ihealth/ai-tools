@@ -409,7 +409,9 @@ def generate_html_summary(
     food_logs_by_meal: Dict[str, List[pd.Series]],
     images_dir: Path,
     date: str,
-    patient_id: str
+    patient_id: str,
+    use_data_uri: bool = True,
+    image_base_url: Optional[str] = None
 ) -> str:
     """
     Generate HTML summary similar to the attached image format.
@@ -491,8 +493,35 @@ def generate_html_summary(
             for img_name in img_names:
                 img_path = images_dir / img_name
                 if img_path.exists():
-                    relative_path = f"{images_dir.name}/{img_name}"
-                    meal_images.append(relative_path)
+                    if use_data_uri:
+                        # Convert to data URI for embedding in HTML
+                        try:
+                            ext = img_path.suffix.lower()
+                            mime = {
+                                ".jpg": "image/jpeg",
+                                ".jpeg": "image/jpeg",
+                                ".png": "image/png",
+                                ".gif": "image/gif",
+                                ".webp": "image/webp",
+                            }.get(ext, "image/jpeg")
+                            data = img_path.read_bytes()
+                            b64 = base64.b64encode(data).decode("ascii")
+                            data_uri = f"data:{mime};base64,{b64}"
+                            meal_images.append(data_uri)
+                        except Exception as e:
+                            # If conversion fails, fall back to URL
+                            if image_base_url:
+                                meal_images.append(f"{image_base_url}/{img_name}")
+                            else:
+                                relative_path = f"{images_dir.name}/{img_name}"
+                                meal_images.append(relative_path)
+                    else:
+                        # Use URL path
+                        if image_base_url:
+                            meal_images.append(f"{image_base_url}/{img_name}")
+                        else:
+                            relative_path = f"{images_dir.name}/{img_name}"
+                            meal_images.append(relative_path)
             
             # Collect ingredients
             ingredients_data = row.get("Ingredients") or row.get("ingredients")

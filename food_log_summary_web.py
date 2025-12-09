@@ -312,6 +312,13 @@ HTML_TEMPLATE = """
                 <input type="date" id="dateSelect" name="date" required/>
             </div>
             
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="debugCheckbox" name="debug"/>
+                    Debug模式（显示数据结构）
+                </label>
+            </div>
+            
             <button type="submit" id="generateBtn">生成总结</button>
         </form>
         
@@ -394,6 +401,7 @@ HTML_TEMPLATE = """
             document.getElementById('generateBtn').disabled = true;
             
             try {
+                const debugMode = document.getElementById('debugCheckbox').checked;
                 const response = await fetch('/api/generate-summary', {
                     method: 'POST',
                     headers: {
@@ -401,7 +409,8 @@ HTML_TEMPLATE = """
                     },
                     body: JSON.stringify({
                         patient_id: patientId,
-                        date: date
+                        date: date,
+                        debug: debugMode
                     })
                 });
                 
@@ -414,6 +423,33 @@ HTML_TEMPLATE = """
                     const frame = document.getElementById('resultFrame');
                     frame.srcdoc = data.html;
                     document.getElementById('resultContainer').classList.add('active');
+                    
+                    // Show debug info if available
+                    if (data.debug) {
+                        console.log('=== Debug Information ===');
+                        console.log('Patient Info:', data.debug.patient_info);
+                        console.log('Food Logs Count:', data.debug.food_logs_count);
+                        console.log('Food Logs Columns:', data.debug.food_logs_columns);
+                        console.log('Sample Food Log:', data.debug.sample_food_log);
+                        console.log('Food Logs by Meal:', data.debug.food_logs_by_meal);
+                        console.log('Image Info:', data.debug.image_info);
+                        console.log('========================');
+                        
+                        // Also show in an alert or debug div
+                        let debugText = '=== Debug Information ===\\n\\n';
+                        debugText += 'Food Logs Count: ' + data.debug.food_logs_count + '\\n';
+                        debugText += 'Columns: ' + data.debug.food_logs_columns.join(', ') + '\\n\\n';
+                        debugText += 'Food Logs by Meal:\\n';
+                        for (const [meal, count] of Object.entries(data.debug.food_logs_by_meal)) {
+                            debugText += '  ' + meal + ': ' + count + '\\n';
+                        }
+                        debugText += '\\nImage Info:\\n';
+                        debugText += '  Total Images: ' + data.debug.image_info.total_images + '\\n';
+                        debugText += '  Downloaded: ' + data.debug.image_info.images_downloaded + '\\n';
+                        debugText += '\\nSee browser console (F12) for full details.';
+                        
+                        alert(debugText);
+                    }
                     
                     // Scroll to result
                     frame.scrollIntoView({ behavior: 'smooth' });
@@ -469,6 +505,7 @@ def api_generate_summary():
         data = request.json
         patient_id = data.get('patient_id')
         date_str = data.get('date')
+        debug = data.get('debug', False)
         
         if not patient_id or not date_str:
             return jsonify({"error": "Missing patient_id or date"}), 400
@@ -507,32 +544,103 @@ def api_generate_summary():
             IMAGES_DIR.mkdir(parents=True, exist_ok=True)
             
             # Download images if session token is provided
-            if SESSION_TOKEN:
-                food_logs_df = download_food_log_images(
-                    food_logs_df,
-                    IMAGES_DIR,
-                    SESSION_TOKEN,
-                    IMAGES_DIR
-                )
+            # Note: This will also try to extract images from MongoDB images field
+            if debug:
+                print(f"[DEBUG] Before image download - ImgName column exists: {'ImgName' in food_logs_df.columns}")
+                if 'images' in food_logs_df.columns:
+                    print(f"[DEBUG] Sample images field: {food_logs_df.iloc[0]['images'] if not food_logs_df.empty else 'N/A'}")
+            
+            # Always try to download/extract images
+            food_logs_df = download_food_log_images(
+                food_logs_df,
+                IMAGES_DIR,
+                SESSION_TOKEN,  # Can be None, will try MongoDB images field first
+                IMAGES_DIR
+            )
+            
+            if debug:
+                print(f"[DEBUG] After image download - ImgName column: {food_logs_df['ImgName'].tolist() if 'ImgName' in food_logs_df.columns else 'Not found'}")
             
             # Group by meal type
             food_logs_by_meal = group_food_logs_by_meal(food_logs_df)
             
-            # Generate HTML
+            # Prepare debug info if requested
+            debug_info = {}
+            if debug:
+                debug_info = {
+                    "patient_info": patient_info,
+                    "food_logs_count": len(food_logs_df),
+                    "food_logs_columns": list(food_logs_df.columns),
+                    "sample_food_log": None,
+                    "food_logs_by_meal": {},
+                    "image_info": {}
+                }
+                
+                # Sample food log (first row)
+                if not food_logs_df.empty:
+                    sample_row = food_logs_df.iloc[0]
+                    debug_info["sample_food_log"] = {
+                        col: str(sample_row[col])[:200] if pd.notna(sample_row[col]) else None 
+                        for col in food_logs_df.columns
+                    }
+                
+                # Food logs by meal type
+                for meal_type, rows in food_logs_by_meal.items():
+                    debug_info["food_logs_by_meal"][meal_type] = len(rows)
+                
+                # Image information
+                image_info = {
+                    "total_images": 0,
+                    "images_downloaded": 0,
+                    "image_files": []
+                }
+                
+                for _, row in food_logs_df.iterrows():
+                    img_names_str = str(row.get("ImgName", "") or "").strip()
+                    if img_names_str:
+                        img_names = [x.strip() for x in img_names_str.split(";") if x.strip()]
+                        image_info["total_images"] += len(img_names)
+                        for img_name in img_names:
+                            img_path = IMAGES_DIR / img_name
+                            if img_path.exists():
+                                image_info["images_downloaded"] += 1
+                                image_info["image_files"].append({
+                                    "name": img_name,
+                                    "path": str(img_path),
+                                    "size": img_path.stat().st_size,
+                                    "exists": True
+                                })
+                            else:
+                                image_info["image_files"].append({
+                                    "name": img_name,
+                                    "path": str(img_path),
+                                    "exists": False
+                                })
+                
+                debug_info["image_info"] = image_info
+            
+            # Generate HTML (use data URI for images in iframe)
             html_content = generate_html_summary(
                 patient_info,
                 food_logs_by_meal,
                 IMAGES_DIR,
                 date_str,
-                patient_id
+                patient_id,
+                use_data_uri=True,  # Use data URI for iframe compatibility
+                image_base_url=None
             )
             
             client.close()
             
-            return jsonify({
+            response = {
                 "success": True,
                 "html": html_content
-            })
+            }
+            
+            if debug:
+                response["debug"] = debug_info
+            
+            return jsonify(response)
             
         finally:
             client.close()
