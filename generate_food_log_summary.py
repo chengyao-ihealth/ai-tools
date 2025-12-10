@@ -14,6 +14,7 @@ import html
 import json
 import base64
 from datetime import datetime, timedelta
+import pytz
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Tuple
 from collections import defaultdict
@@ -542,7 +543,8 @@ def generate_html_summary(
             'kcal': 'kcal',
             'main_ingredients': '主要食材',
             'notes': '备注',
-            'no_food_logs': '该日期没有食物日志记录'
+            'no_food_logs': '该日期没有食物日志记录',
+            'logged_at': '记录时间'
         },
         'en': {
             'patient_info': 'Patient Information',
@@ -561,7 +563,8 @@ def generate_html_summary(
             'kcal': 'kcal',
             'main_ingredients': 'Main Ingredients',
             'notes': 'Notes',
-            'no_food_logs': 'No food log records for this date'
+            'no_food_logs': 'No food log records for this date',
+            'logged_at': 'Logged at'
         }
     }
     t = labels.get(language, labels['zh'])
@@ -632,7 +635,59 @@ def generate_html_summary(
             continue
         
         food_log_html += f'<div class="meal-section">'
-        food_log_html += f'<h3>{meal_type}</h3>'
+        
+        # Collect all timestamps for this meal
+        # Convert to PT timezone if timezone info is available, otherwise keep as-is
+        meal_times = []
+        pt_timezone = pytz.timezone('America/Los_Angeles')
+        
+        for row in food_logs_by_meal[meal_type]:
+            # Try to get timestamp from various fields
+            timestamp = None
+            for field in ["createdAt", "created_at", "uploadedAt", "uploaded_at"]:
+                if field in row and pd.notna(row[field]):
+                    try:
+                        timestamp = pd.to_datetime(row[field])
+                        break
+                    except:
+                        continue
+            
+            if timestamp is not None:
+                # If timestamp has timezone info, convert to PT
+                # If no timezone info, assume UTC and convert to PT
+                if timestamp.tzinfo is not None:
+                    # Has timezone info, convert to PT
+                    pt_timestamp = timestamp.astimezone(pt_timezone)
+                else:
+                    # No timezone info, assume UTC and convert to PT
+                    utc_timestamp = pytz.utc.localize(timestamp)
+                    pt_timestamp = utc_timestamp.astimezone(pt_timezone)
+                meal_times.append(pt_timestamp)
+        
+        # Format meal header with times
+        if meal_times:
+            time_strs = []
+            # Sort by time value
+            sorted_times = sorted(set(meal_times))
+            
+            for pt_timestamp in sorted_times:
+                if language == 'zh':
+                    time_str = pt_timestamp.strftime('%H:%M')  # 24-hour format for Chinese
+                    time_str += ' PT'  # Always show PT since we always convert
+                    time_strs.append(time_str)
+                else:
+                    time_str = pt_timestamp.strftime('%I:%M %p')  # 12-hour format with AM/PM
+                    time_str += ' PT'  # Always show PT since we always convert
+                    time_strs.append(time_str)
+            
+            if language == 'zh':
+                times_display = f" ({t['logged_at']}: {', '.join(time_strs)})"
+            else:
+                times_display = f" ({t['logged_at']}: {', '.join(time_strs)})"
+        else:
+            times_display = ""
+        
+        food_log_html += f'<h3>{meal_type}{times_display}</h3>'
         
         # Collect all images and ingredients for this meal
         meal_images = []

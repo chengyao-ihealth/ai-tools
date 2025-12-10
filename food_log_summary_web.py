@@ -95,11 +95,9 @@ def get_all_patient_ids_with_food_logs(
                     "_id": "$memberId",
                     "count": {"$sum": 1},
                     "latest_date": {"$max": "$createdAt"},
-                    "earliest_date": {"$min": "$createdAt"}
+                    "earliest_date": {"$min": "$createdAt"},
+                    "logs": {"$push": "$createdAt"}  # Keep all log dates for calculating top days
                 }
-            },
-            {
-                "$sort": {"_id": -1}  # 倒序排列，最新的在最前面
             }
         ]
         
@@ -126,26 +124,52 @@ def get_all_patient_ids_with_food_logs(
             elif earliest_date:
                 earliest_date = str(earliest_date)
             
-            # Convert datetime to ISO format string if present
-            latest_date = doc.get("latest_date")
-            earliest_date = doc.get("earliest_date")
-            
-            if latest_date and isinstance(latest_date, datetime):
-                latest_date = latest_date.isoformat()
-            elif latest_date:
-                latest_date = str(latest_date)
-            
-            if earliest_date and isinstance(earliest_date, datetime):
-                earliest_date = earliest_date.isoformat()
-            elif earliest_date:
-                earliest_date = str(earliest_date)
+            # Calculate top 5 days with most logs
+            top_days = []
+            logs = doc.get("logs", [])
+            if logs:
+                # Count logs per day
+                from collections import defaultdict
+                daily_counts = defaultdict(int)
+                for log_date in logs:
+                    if isinstance(log_date, datetime):
+                        # Use the date as-is, keeping original timezone
+                        # If timezone-aware, convert to local date in that timezone
+                        if log_date.tzinfo is not None:
+                            # Get date in the original timezone
+                            day_str = log_date.date().isoformat()
+                        else:
+                            day_str = log_date.date().isoformat()
+                    else:
+                        # Try to parse if it's a string, keep original timezone
+                        try:
+                            if isinstance(log_date, str):
+                                # Try parsing with timezone info preserved
+                                if log_date.endswith('Z'):
+                                    # UTC timezone
+                                    log_date = datetime.fromisoformat(log_date.replace('Z', '+00:00'))
+                                else:
+                                    # Try to parse preserving timezone
+                                    log_date = datetime.fromisoformat(log_date)
+                            day_str = log_date.date().isoformat()
+                        except:
+                            continue
+                    daily_counts[day_str] += 1
+                
+                # Sort by count (descending) and take top 5
+                sorted_days = sorted(daily_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+                top_days = [{"date": date_str, "count": count} for date_str, count in sorted_days]
             
             patient_list.append({
                 "patient_id": str(member_id),
                 "food_log_count": doc.get("count", 0),
                 "latest_date": latest_date,
-                "earliest_date": earliest_date
+                "earliest_date": earliest_date,
+                "top_days": top_days  # Top 5 days with most logs
             })
+        
+        # Sort by latest_date (most recent first)
+        patient_list.sort(key=lambda x: x.get("latest_date", ""), reverse=True)
         
         return patient_list
     except Exception as e:
@@ -311,6 +335,8 @@ HTML_TEMPLATE = """
                     <div id="foodLogCountLabel">食物日志数量: <span id="foodLogCount">-</span></div>
                     <div id="earliestDateLabel">最早日期: <span id="earliestDate">-</span></div>
                     <div id="latestDateLabel">最晚日期: <span id="latestDate">-</span></div>
+                    <div id="topDaysLabel" style="margin-top: 10px; font-weight: 600;">日志数量最多的五天:</div>
+                    <div id="topDaysList" style="margin-left: 10px; margin-top: 5px;"></div>
                 </div>
             </div>
             
@@ -361,6 +387,7 @@ HTML_TEMPLATE = """
                 foodLogCount: '食物日志数量:',
                 earliestDate: '最早日期:',
                 latestDate: '最晚日期:',
+                topDays: '日志数量最多的五天:',
                 pleaseSelect: '请选择病人 ID...',
                 loadingText: '加载中...',
                 errorLoading: '加载失败，请刷新页面重试',
@@ -378,6 +405,7 @@ HTML_TEMPLATE = """
                 foodLogCount: 'Food Log Count:',
                 earliestDate: 'Earliest Date:',
                 latestDate: 'Latest Date:',
+                topDays: 'Top 5 Days with Most Logs:',
                 pleaseSelect: 'Please select Patient ID...',
                 loadingText: 'Loading...',
                 errorLoading: 'Failed to load, please refresh and try again',
@@ -403,18 +431,27 @@ HTML_TEMPLATE = """
             document.getElementById('loadingText').textContent = t.loading;
             document.getElementById('resultTitle').textContent = t.resultTitle;
             
+            // Update labels for patient info section
             const patientInfo = document.getElementById('patientInfo');
-            if (patientInfo && patientInfo.style.display !== 'none') {
+            if (patientInfo) {
+                // Get current values if they exist
                 const foodLogCountEl = document.getElementById('foodLogCount');
                 const earliestDateEl = document.getElementById('earliestDate');
                 const latestDateEl = document.getElementById('latestDate');
-                const count = foodLogCountEl ? foodLogCountEl.textContent : '-';
-                const earliest = earliestDateEl ? earliestDateEl.textContent : '-';
-                const latest = latestDateEl ? latestDateEl.textContent : '-';
+                const count = foodLogCountEl && foodLogCountEl.textContent !== '-' ? foodLogCountEl.textContent : '-';
+                const earliest = earliestDateEl && earliestDateEl.textContent !== '-' ? earliestDateEl.textContent : '-';
+                const latest = latestDateEl && latestDateEl.textContent !== '-' ? latestDateEl.textContent : '-';
                 
+                // Update labels with preserved or default values
                 document.getElementById('foodLogCountLabel').innerHTML = `${t.foodLogCount} <span id="foodLogCount">${count}</span>`;
                 document.getElementById('earliestDateLabel').innerHTML = `${t.earliestDate} <span id="earliestDate">${earliest}</span>`;
                 document.getElementById('latestDateLabel').innerHTML = `${t.latestDate} <span id="latestDate">${latest}</span>`;
+                
+                // Update top days label if element exists
+                const topDaysLabelEl = document.getElementById('topDaysLabel');
+                if (topDaysLabelEl) {
+                    topDaysLabelEl.textContent = t.topDays;
+                }
             }
         }
         
@@ -445,6 +482,27 @@ HTML_TEMPLATE = """
                                 option.dataset.earliest ? new Date(option.dataset.earliest).toLocaleDateString(locale) : '-';
                             document.getElementById('latestDate').textContent = 
                                 option.dataset.latest ? new Date(option.dataset.latest).toLocaleDateString(locale) : '-';
+                            
+                            // Update top 5 days
+                            const topDaysList = document.getElementById('topDaysList');
+                            try {
+                                const topDays = JSON.parse(option.dataset.topDays || '[]');
+                                if (topDays && topDays.length > 0) {
+                                    let html = '';
+                                    topDays.forEach(day => {
+                                        const dateObj = new Date(day.date);
+                                        const dateStr = dateObj.toLocaleDateString(locale);
+                                        html += `<div style="margin: 3px 0;">${dateStr} - ${day.count} ${t.records}</div>`;
+                                    });
+                                    topDaysList.innerHTML = html;
+                                } else {
+                                    const noDataText = currentLang === 'zh' ? '暂无数据' : 'No data';
+                                    topDaysList.innerHTML = `<div style="color: #999;">${noDataText}</div>`;
+                                }
+                            } catch (e) {
+                                const noDataText = currentLang === 'zh' ? '暂无数据' : 'No data';
+                                topDaysList.innerHTML = `<div style="color: #999;">${noDataText}</div>`;
+                            }
                         }
                     }
                 }
@@ -489,20 +547,54 @@ HTML_TEMPLATE = """
                         option.dataset.count = patient.food_log_count;
                         option.dataset.earliest = patient.earliest_date || '';
                         option.dataset.latest = patient.latest_date || '';
+                        option.dataset.topDays = JSON.stringify(patient.top_days || []);
                         select.appendChild(option);
                     });
                     
                     // Update patient info when selection changes
                     select.addEventListener('change', function() {
                         const option = this.options[this.selectedIndex];
-                        if (option.value) {
+                        if (option && option.value) {
                             const t = translations[currentLang];
-                            document.getElementById('foodLogCount').textContent = option.dataset.count;
                             const locale = currentLang === 'zh' ? 'zh-CN' : 'en-US';
-                            document.getElementById('earliestDate').textContent = 
-                                option.dataset.earliest ? new Date(option.dataset.earliest).toLocaleDateString(locale) : '-';
-                            document.getElementById('latestDate').textContent = 
-                                option.dataset.latest ? new Date(option.dataset.latest).toLocaleDateString(locale) : '-';
+                            
+                            // Get values first
+                            const count = option.dataset.count || '-';
+                            const earliestDateStr = option.dataset.earliest ? new Date(option.dataset.earliest).toLocaleDateString(locale) : '-';
+                            const latestDateStr = option.dataset.latest ? new Date(option.dataset.latest).toLocaleDateString(locale) : '-';
+                            
+                            // Update values in spans
+                            document.getElementById('foodLogCount').textContent = count;
+                            document.getElementById('earliestDate').textContent = earliestDateStr;
+                            document.getElementById('latestDate').textContent = latestDateStr;
+                            
+                            // Update labels with values embedded
+                            document.getElementById('foodLogCountLabel').innerHTML = `${t.foodLogCount} <span id="foodLogCount">${count}</span>`;
+                            document.getElementById('earliestDateLabel').innerHTML = `${t.earliestDate} <span id="earliestDate">${earliestDateStr}</span>`;
+                            document.getElementById('latestDateLabel').innerHTML = `${t.latestDate} <span id="latestDate">${latestDateStr}</span>`;
+                            document.getElementById('topDaysLabel').textContent = t.topDays;
+                            
+                            // Display top 5 days
+                            const topDaysList = document.getElementById('topDaysList');
+                            try {
+                                const topDays = JSON.parse(option.dataset.topDays || '[]');
+                                if (topDays && topDays.length > 0) {
+                                    let html = '';
+                                    topDays.forEach(day => {
+                                        const dateObj = new Date(day.date);
+                                        const dateStr = dateObj.toLocaleDateString(locale);
+                                        html += `<div style="margin: 3px 0;">${dateStr} - ${day.count} ${t.records}</div>`;
+                                    });
+                                    topDaysList.innerHTML = html;
+                                } else {
+                                    const noDataText = currentLang === 'zh' ? '暂无数据' : 'No data';
+                                    topDaysList.innerHTML = `<div style="color: #999;">${noDataText}</div>`;
+                                }
+                            } catch (e) {
+                                const noDataText = currentLang === 'zh' ? '暂无数据' : 'No data';
+                                topDaysList.innerHTML = `<div style="color: #999;">${noDataText}</div>`;
+                            }
+                            
                             document.getElementById('patientInfo').style.display = 'block';
                         } else {
                             document.getElementById('patientInfo').style.display = 'none';
@@ -568,33 +660,32 @@ HTML_TEMPLATE = """
                         console.log('=== Debug Information ===');
                         console.log('Patient Info:', data.debug.patient_info);
                         console.log('Food Logs Count:', data.debug.food_logs_count);
-                        console.log('Food Logs Columns:', data.debug.food_logs_columns);
-                        console.log('Sample Food Log:', data.debug.sample_food_log);
-                        console.log('Food Logs by Meal:', data.debug.food_logs_by_meal);
-                        console.log('Image Info:', data.debug.image_info);
-                        console.log('API Responses:', data.debug.api_responses);
+                        console.log('Food Logs Raw Data (from MongoDB):', data.debug.food_logs_raw);
+                        console.log('API Responses (from GET /food-log/{id}):', data.debug.api_responses);
                         console.log('========================');
                         
-                        // Also show in an alert or debug div
-                        let debugText = '=== Debug Information ===\\n\\n';
-                        debugText += 'Food Logs Count: ' + data.debug.food_logs_count + '\\n';
-                        debugText += 'Columns: ' + data.debug.food_logs_columns.join(', ') + '\\n\\n';
-                        debugText += 'Food Logs by Meal:\\n';
-                        for (const [meal, count] of Object.entries(data.debug.food_logs_by_meal)) {
-                            debugText += '  ' + meal + ': ' + count + '\\n';
+                        // Show complete data in console
+                        if (data.debug.food_logs_raw && data.debug.food_logs_raw.length > 0) {
+                            console.log('\\n=== Complete Food Logs Raw Data ===');
+                            data.debug.food_logs_raw.forEach((foodLog, index) => {
+                                console.log(`\\nFood Log ${index + 1}:`, JSON.stringify(foodLog, null, 2));
+                            });
                         }
-                        debugText += '\\nImage Info:\\n';
-                        debugText += '  Total Images: ' + data.debug.image_info.total_images + '\\n';
-                        debugText += '  Downloaded: ' + data.debug.image_info.images_downloaded + '\\n';
-                        debugText += '\\nAPI Responses:\\n';
+                        
                         if (data.debug.api_responses && Object.keys(data.debug.api_responses).length > 0) {
+                            console.log('\\n=== Complete API Responses ===');
                             for (const [foodLogId, response] of Object.entries(data.debug.api_responses)) {
-                                debugText += '  FoodLog ' + foodLogId + ': ' + JSON.stringify(response, null, 2).substring(0, 500) + '...\\n';
+                                console.log(`\\nFoodLog ID: ${foodLogId}`, JSON.stringify(response, null, 2));
                             }
-                        } else {
-                            debugText += '  No API responses collected\\n';
                         }
-                        debugText += '\\nSee browser console (F12) for full details.';
+                        
+                        // Show summary in alert
+                        let debugText = '=== Debug Information ===\\n\\n';
+                        debugText += 'Food Logs Count: ' + data.debug.food_logs_count + '\\n\\n';
+                        debugText += 'Complete data available in browser console (F12)\\n';
+                        debugText += '\\n- Food Logs Raw Data (from MongoDB)\\n';
+                        debugText += '- API Responses (from GET /food-log/{id})\\n';
+                        debugText += '\\nOpen browser console to see full details.';
                         
                         alert(debugText);
                     }
@@ -720,73 +811,41 @@ def api_generate_summary():
             # Prepare debug info if requested
             debug_info = {}
             if debug:
-                debug_info = {
-                    "patient_info": patient_info,
-                    "food_logs_count": len(food_logs_df),
-                    "food_logs_columns": list(food_logs_df.columns),
-                    "sample_food_log": None,
-                    "food_logs_by_meal": {},
-                    "image_info": {},
-                    "api_responses": api_responses  # Add raw API responses
-                }
-                
-                # Sample food log (first row)
-                if not food_logs_df.empty:
-                    sample_row = food_logs_df.iloc[0]
-                    sample_data = {}
+                # Convert DataFrame to list of dicts for JSON serialization
+                food_logs_raw = []
+                for _, row in food_logs_df.iterrows():
+                    food_log_dict = {}
                     for col in food_logs_df.columns:
-                        val = sample_row[col]
+                        val = row[col]
                         # Handle different data types safely
                         try:
                             if pd.isna(val):
-                                sample_data[col] = None
+                                food_log_dict[col] = None
                             elif isinstance(val, (list, dict)):
-                                # Convert list/dict to JSON string for display
-                                sample_data[col] = json.dumps(val, ensure_ascii=False, default=str)[:500]
+                                # Keep as is for JSON serialization
+                                food_log_dict[col] = val
+                            elif isinstance(val, (pd.Timestamp, datetime)):
+                                # Convert datetime to ISO string
+                                food_log_dict[col] = val.isoformat() if hasattr(val, 'isoformat') else str(val)
+                            elif isinstance(val, ObjectId):
+                                # Convert ObjectId to string
+                                food_log_dict[col] = str(val)
                             else:
-                                sample_data[col] = str(val)[:200]
-                        except (TypeError, ValueError):
-                            # If conversion fails, try to stringify anyway
+                                food_log_dict[col] = val
+                        except (TypeError, ValueError) as e:
+                            # If conversion fails, try to stringify
                             try:
-                                sample_data[col] = str(val)[:200]
+                                food_log_dict[col] = str(val)
                             except:
-                                sample_data[col] = f"<unable to convert type {type(val)}>"
-                    debug_info["sample_food_log"] = sample_data
+                                food_log_dict[col] = f"<unable to convert: {type(val)}>"
+                    food_logs_raw.append(food_log_dict)
                 
-                # Food logs by meal type
-                for meal_type, rows in food_logs_by_meal.items():
-                    debug_info["food_logs_by_meal"][meal_type] = len(rows)
-                
-                # Image information
-                image_info = {
-                    "total_images": 0,
-                    "images_downloaded": 0,
-                    "image_files": []
+                debug_info = {
+                    "patient_info": patient_info,
+                    "food_logs_count": len(food_logs_df),
+                    "food_logs_raw": food_logs_raw,  # Complete raw food log data from MongoDB
+                    "api_responses": api_responses  # Complete API responses for each food log
                 }
-                
-                for _, row in food_logs_df.iterrows():
-                    img_names_str = str(row.get("ImgName", "") or "").strip()
-                    if img_names_str:
-                        img_names = [x.strip() for x in img_names_str.split(";") if x.strip()]
-                        image_info["total_images"] += len(img_names)
-                        for img_name in img_names:
-                            img_path = IMAGES_DIR / img_name
-                            if img_path.exists():
-                                image_info["images_downloaded"] += 1
-                                image_info["image_files"].append({
-                                    "name": img_name,
-                                    "path": str(img_path),
-                                    "size": img_path.stat().st_size,
-                                    "exists": True
-                                })
-                            else:
-                                image_info["image_files"].append({
-                                    "name": img_name,
-                                    "path": str(img_path),
-                                    "exists": False
-                                })
-                
-                debug_info["image_info"] = image_info
             
             # Generate HTML (use data URI for images in iframe)
             html_content = generate_html_summary(

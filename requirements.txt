@@ -11,6 +11,9 @@ pymongo>=4.0.0
 # Environment variables
 python-dotenv>=1.0.0
 
+# Timezone support
+pytz>=2023.3
+
 # Web framework
 flask>=2.0.0
 flask-cors>=3.0.0
