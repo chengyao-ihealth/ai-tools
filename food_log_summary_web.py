@@ -279,6 +279,14 @@ HTML_TEMPLATE = """
             border: 1px solid #e0e0e0;
             border-radius: 6px;
         }
+        .language-switch .lang-option.active {
+            background: #4a90e2 !important;
+            color: white !important;
+        }
+        .language-switch .lang-option:not(.active) {
+            background: white !important;
+            color: #4a90e2 !important;
+        }
         .patient-info-display {
             margin-top: 10px;
             padding: 10px;
@@ -291,30 +299,36 @@ HTML_TEMPLATE = """
 </head>
 <body>
     <div class="container">
-        <h1>食物日志总结生成器</h1>
+        <h1 id="pageTitle">食物日志总结生成器</h1>
         
         <form id="summaryForm">
             <div class="form-group">
-                <label for="patientSelect">选择病人 ID:</label>
+                <label for="patientSelect" id="patientLabel">选择病人 ID:</label>
                 <select id="patientSelect" name="patient_id" required>
                     <option value="">加载中...</option>
                 </select>
                 <div class="patient-info-display" id="patientInfo" style="display: none;">
-                    <div>食物日志数量: <span id="foodLogCount">-</span></div>
-                    <div>最早日期: <span id="earliestDate">-</span></div>
-                    <div>最晚日期: <span id="latestDate">-</span></div>
+                    <div id="foodLogCountLabel">食物日志数量: <span id="foodLogCount">-</span></div>
+                    <div id="earliestDateLabel">最早日期: <span id="earliestDate">-</span></div>
+                    <div id="latestDateLabel">最晚日期: <span id="latestDate">-</span></div>
                 </div>
             </div>
             
             <div class="form-group">
-                <label for="dateSelect">选择日期:</label>
-                <input type="date" id="dateSelect" name="date" required/>
+                <label for="dateSelect" id="dateLabel">选择日期:</label>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <input type="date" id="dateSelect" name="date" required style="flex: 1; max-width: 200px;"/>
+                    <div class="language-switch" id="languageSwitch" style="display: flex; border: 2px solid #4a90e2; border-radius: 6px; overflow: hidden; cursor: pointer; user-select: none;">
+                        <span class="lang-option" data-lang="zh" style="padding: 6px 12px; background: #4a90e2; color: white; font-size: 13px; font-weight: 600;">中</span>
+                        <span class="lang-option" data-lang="en" style="padding: 6px 12px; background: white; color: #4a90e2; font-size: 13px; font-weight: 600;">EN</span>
+                    </div>
+                </div>
             </div>
             
             <div class="form-group">
                 <label>
                     <input type="checkbox" id="debugCheckbox" name="debug"/>
-                    Debug模式（显示数据结构）
+                    <span id="debugLabel">Debug模式（显示数据结构）</span>
                 </label>
             </div>
             
@@ -323,63 +337,187 @@ HTML_TEMPLATE = """
         
         <div class="loading" id="loading">
             <div class="spinner"></div>
-            <div>正在生成食物日志总结，请稍候...</div>
+            <div id="loadingText">正在生成食物日志总结，请稍候...</div>
         </div>
         
         <div class="error" id="error"></div>
         
         <div class="result-container" id="resultContainer">
-            <h2>生成的总结</h2>
+            <h2 id="resultTitle">生成的总结</h2>
             <iframe id="resultFrame" class="result-frame" src=""></iframe>
         </div>
     </div>
     
     <script>
+        // Language translations
+        const translations = {
+            zh: {
+                title: '食物日志总结生成器',
+                selectPatient: '选择病人 ID:',
+                selectDate: '选择日期:',
+                generate: '生成总结',
+                loading: '正在生成食物日志总结，请稍候...',
+                resultTitle: '生成的总结',
+                foodLogCount: '食物日志数量:',
+                earliestDate: '最早日期:',
+                latestDate: '最晚日期:',
+                pleaseSelect: '请选择病人 ID...',
+                loadingText: '加载中...',
+                errorLoading: '加载失败，请刷新页面重试',
+                errorSelect: '请选择病人 ID 和日期',
+                records: '条记录',
+                debugMode: 'Debug模式（显示数据结构）'
+            },
+            en: {
+                title: 'Food Log Summary Generator',
+                selectPatient: 'Select Patient ID:',
+                selectDate: 'Select Date:',
+                generate: 'Generate Summary',
+                loading: 'Generating food log summary, please wait...',
+                resultTitle: 'Generated Summary',
+                foodLogCount: 'Food Log Count:',
+                earliestDate: 'Earliest Date:',
+                latestDate: 'Latest Date:',
+                pleaseSelect: 'Please select Patient ID...',
+                loadingText: 'Loading...',
+                errorLoading: 'Failed to load, please refresh and try again',
+                errorSelect: 'Please select Patient ID and Date',
+                records: ' records',
+                debugMode: 'Debug Mode (Show Raw API Data)'
+            }
+        };
+        
+        let currentLang = localStorage.getItem('language') || 'zh';
+        
+        // Update UI language
+        function updateLanguage(lang) {
+            currentLang = lang;
+            localStorage.setItem('language', lang);
+            const t = translations[lang];
+            
+            document.getElementById('pageTitle').textContent = t.title;
+            document.getElementById('patientLabel').textContent = t.selectPatient;
+            document.getElementById('dateLabel').textContent = t.selectDate;
+            document.getElementById('debugLabel').textContent = t.debugMode;
+            document.getElementById('generateBtn').textContent = t.generate;
+            document.getElementById('loadingText').textContent = t.loading;
+            document.getElementById('resultTitle').textContent = t.resultTitle;
+            
+            const patientInfo = document.getElementById('patientInfo');
+            if (patientInfo && patientInfo.style.display !== 'none') {
+                const foodLogCountEl = document.getElementById('foodLogCount');
+                const earliestDateEl = document.getElementById('earliestDate');
+                const latestDateEl = document.getElementById('latestDate');
+                const count = foodLogCountEl ? foodLogCountEl.textContent : '-';
+                const earliest = earliestDateEl ? earliestDateEl.textContent : '-';
+                const latest = latestDateEl ? latestDateEl.textContent : '-';
+                
+                document.getElementById('foodLogCountLabel').innerHTML = `${t.foodLogCount} <span id="foodLogCount">${count}</span>`;
+                document.getElementById('earliestDateLabel').innerHTML = `${t.earliestDate} <span id="earliestDate">${earliest}</span>`;
+                document.getElementById('latestDateLabel').innerHTML = `${t.latestDate} <span id="latestDate">${latest}</span>`;
+            }
+        }
+        
+        // Language switch click handler
+        document.querySelectorAll('.lang-option').forEach(option => {
+            option.addEventListener('click', function() {
+                const lang = this.dataset.lang;
+                if (lang !== currentLang) {
+                    // Update active state
+                    document.querySelectorAll('.lang-option').forEach(opt => {
+                        opt.classList.remove('active');
+                    });
+                    this.classList.add('active');
+                    
+                    updateLanguage(lang);
+                    // Reload patient IDs to update text
+                    loadPatientIDs();
+                    
+                    // Reload patient info if selected
+                    const patientId = document.getElementById('patientSelect').value;
+                    if (patientId) {
+                        const option = document.getElementById('patientSelect').options[document.getElementById('patientSelect').selectedIndex];
+                        if (option.value) {
+                            const t = translations[currentLang];
+                            document.getElementById('foodLogCount').textContent = option.dataset.count;
+                            const locale = currentLang === 'zh' ? 'zh-CN' : 'en-US';
+                            document.getElementById('earliestDate').textContent = 
+                                option.dataset.earliest ? new Date(option.dataset.earliest).toLocaleDateString(locale) : '-';
+                            document.getElementById('latestDate').textContent = 
+                                option.dataset.latest ? new Date(option.dataset.latest).toLocaleDateString(locale) : '-';
+                        }
+                    }
+                }
+            });
+        });
+        
+        // Initialize language - clear all active states first, then set the correct one
+        document.querySelectorAll('.lang-option').forEach(opt => {
+            opt.classList.remove('active');
+        });
+        const initialLangOption = document.querySelector(`.lang-option[data-lang="${currentLang}"]`);
+        if (initialLangOption) {
+            initialLangOption.classList.add('active');
+        } else {
+            // Fallback to Chinese if currentLang doesn't match any option
+            document.querySelector('.lang-option[data-lang="zh"]').classList.add('active');
+            currentLang = 'zh';
+        }
+        updateLanguage(currentLang);
+        
         // Set today as default date
         document.getElementById('dateSelect').valueAsDate = new Date();
         
         // Load patient IDs
-        fetch('/api/patient-ids')
-            .then(response => response.json())
-            .then(data => {
-                const select = document.getElementById('patientSelect');
-                select.innerHTML = '<option value="">请选择病人 ID...</option>';
-                
-                if (data.error) {
-                    select.innerHTML = `<option value="">错误: ${data.error}</option>`;
-                    return;
-                }
-                
-                data.patients.forEach(patient => {
-                    const option = document.createElement('option');
-                    option.value = patient.patient_id;
-                    option.textContent = `${patient.patient_id} (${patient.food_log_count} 条记录)`;
-                    option.dataset.count = patient.food_log_count;
-                    option.dataset.earliest = patient.earliest_date || '';
-                    option.dataset.latest = patient.latest_date || '';
-                    select.appendChild(option);
-                });
-                
-                // Update patient info when selection changes
-                select.addEventListener('change', function() {
-                    const option = this.options[this.selectedIndex];
-                    if (option.value) {
-                        document.getElementById('foodLogCount').textContent = option.dataset.count;
-                        document.getElementById('earliestDate').textContent = 
-                            option.dataset.earliest ? new Date(option.dataset.earliest).toLocaleDateString('zh-CN') : '-';
-                        document.getElementById('latestDate').textContent = 
-                            option.dataset.latest ? new Date(option.dataset.latest).toLocaleDateString('zh-CN') : '-';
-                        document.getElementById('patientInfo').style.display = 'block';
-                    } else {
-                        document.getElementById('patientInfo').style.display = 'none';
+        function loadPatientIDs() {
+            const t = translations[currentLang];
+            fetch('/api/patient-ids')
+                .then(response => response.json())
+                .then(data => {
+                    const select = document.getElementById('patientSelect');
+                    select.innerHTML = `<option value="">${t.pleaseSelect}</option>`;
+                    
+                    if (data.error) {
+                        select.innerHTML = `<option value="">${t.errorLoading}: ${data.error}</option>`;
+                        return;
                     }
+                    
+                    data.patients.forEach(patient => {
+                        const option = document.createElement('option');
+                        option.value = patient.patient_id;
+                        option.textContent = `${patient.patient_id} (${patient.food_log_count} ${t.records})`;
+                        option.dataset.count = patient.food_log_count;
+                        option.dataset.earliest = patient.earliest_date || '';
+                        option.dataset.latest = patient.latest_date || '';
+                        select.appendChild(option);
+                    });
+                    
+                    // Update patient info when selection changes
+                    select.addEventListener('change', function() {
+                        const option = this.options[this.selectedIndex];
+                        if (option.value) {
+                            const t = translations[currentLang];
+                            document.getElementById('foodLogCount').textContent = option.dataset.count;
+                            const locale = currentLang === 'zh' ? 'zh-CN' : 'en-US';
+                            document.getElementById('earliestDate').textContent = 
+                                option.dataset.earliest ? new Date(option.dataset.earliest).toLocaleDateString(locale) : '-';
+                            document.getElementById('latestDate').textContent = 
+                                option.dataset.latest ? new Date(option.dataset.latest).toLocaleDateString(locale) : '-';
+                            document.getElementById('patientInfo').style.display = 'block';
+                        } else {
+                            document.getElementById('patientInfo').style.display = 'none';
+                        }
+                    });
+                })
+                .catch(error => {
+                    console.error('Error loading patient IDs:', error);
+                    const t = translations[currentLang];
+                    document.getElementById('patientSelect').innerHTML = 
+                        `<option value="">${t.errorLoading}</option>`;
                 });
-            })
-            .catch(error => {
-                console.error('Error loading patient IDs:', error);
-                document.getElementById('patientSelect').innerHTML = 
-                    '<option value="">加载失败，请刷新页面重试</option>';
-            });
+        }
+        
+        loadPatientIDs();
         
         // Handle form submission
         document.getElementById('summaryForm').addEventListener('submit', async function(e) {
@@ -387,9 +525,10 @@ HTML_TEMPLATE = """
             
             const patientId = document.getElementById('patientSelect').value;
             const date = document.getElementById('dateSelect').value;
+            const t = translations[currentLang];
             
             if (!patientId || !date) {
-                showError('请选择病人 ID 和日期');
+                showError(t.errorSelect);
                 return;
             }
             
@@ -407,9 +546,10 @@ HTML_TEMPLATE = """
                         'Content-Type': 'application/json',
                     },
                     body: JSON.stringify({
-                        patient_id: patientId,
-                        date: date,
-                        debug: debugMode
+                    patient_id: patientId,
+                    date: date,
+                    language: currentLang,
+                    debug: debugMode
                     })
                 });
                 
@@ -463,7 +603,8 @@ HTML_TEMPLATE = """
                     frame.scrollIntoView({ behavior: 'smooth' });
                 }
             } catch (error) {
-                showError('生成失败: ' + error.message);
+                const t = translations[currentLang];
+                showError((currentLang === 'zh' ? '生成失败: ' : 'Generation failed: ') + error.message);
             } finally {
                 document.getElementById('loading').classList.remove('active');
                 document.getElementById('generateBtn').disabled = false;
@@ -513,6 +654,7 @@ def api_generate_summary():
         data = request.json
         patient_id = data.get('patient_id')
         date_str = data.get('date')
+        language = data.get('language', 'zh')  # Default to Chinese
         debug = data.get('debug', False)
         
         if not patient_id or not date_str:
@@ -573,7 +715,7 @@ def api_generate_summary():
                 print(f"[DEBUG] After image download - ImgName column: {food_logs_df['ImgName'].tolist() if 'ImgName' in food_logs_df.columns else 'Not found'}")
             
             # Group by meal type
-            food_logs_by_meal = group_food_logs_by_meal(food_logs_df)
+            food_logs_by_meal = group_food_logs_by_meal(food_logs_df, language=language)
             
             # Prepare debug info if requested
             debug_info = {}
@@ -654,7 +796,8 @@ def api_generate_summary():
                 date_str,
                 patient_id,
                 use_data_uri=True,  # Use data URI for iframe compatibility
-                image_base_url=None
+                image_base_url=None,
+                language=language
             )
             
             client.close()

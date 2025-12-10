@@ -349,13 +349,31 @@ def get_food_log_image_urls(
     return food_logs_df, api_responses
 
 
-def parse_meal_type(row: pd.Series) -> str:
+def parse_meal_type(row: pd.Series, language: str = 'zh') -> str:
     """
     Parse meal type from food log row.
     从食物日志行解析餐次类型。
     
-    Returns: "早餐", "午餐", "晚餐", or "其他"
+    Args:
+        language: 'zh' for Chinese, 'en' for English
+    
+    Returns: "早餐"/"Breakfast", "午餐"/"Lunch", "晚餐"/"Dinner", or "其他"/"Other"
     """
+    meal_translations = {
+        'zh': {
+            'breakfast': '早餐',
+            'lunch': '午餐',
+            'dinner': '晚餐',
+            'other': '其他'
+        },
+        'en': {
+            'breakfast': 'Breakfast',
+            'lunch': 'Lunch',
+            'dinner': 'Dinner',
+            'other': 'Other'
+        }
+    }
+    t = meal_translations.get(language, meal_translations['zh'])
     # Try different field names for meal title
     meal_title = ""
     for field in ["MealTitle", "mealTitle", "meal_type", "mealType", "meal_title"]:
@@ -378,27 +396,35 @@ def parse_meal_type(row: pd.Series) -> str:
         if created_at:
             hour = created_at.hour
             if 5 <= hour < 10:
-                return "早餐"
+                return t['breakfast']
             elif 10 <= hour < 14:
-                return "午餐"
+                return t['lunch']
             elif 14 <= hour < 20:
-                return "晚餐"
+                return t['dinner']
             else:
-                return "其他"
+                return t['other']
         
-        return "其他"
+        return t['other']
     
     meal_lower = meal_title.lower()
     
-    # English
+    # English keywords
     if any(keyword in meal_lower for keyword in ["breakfast", "morning"]):
-        return "早餐"
+        return t['breakfast']
     if any(keyword in meal_lower for keyword in ["lunch", "noon", "midday"]):
-        return "午餐"
+        return t['lunch']
     if any(keyword in meal_lower for keyword in ["dinner", "evening", "night", "supper"]):
-        return "晚餐"
+        return t['dinner']
     if any(keyword in meal_lower for keyword in ["snack", "snacks"]):
-        return "其他"
+        return t['other']
+    
+    # Chinese keywords
+    if "早餐" in meal_title:
+        return t['breakfast']
+    if "午餐" in meal_title:
+        return t['lunch']
+    if "晚餐" in meal_title or "晚饭" in meal_title:
+        return t['dinner']
     
     # Chinese
     if "早餐" in meal_title or "早饭" in meal_title or "早" in meal_title:
@@ -408,7 +434,7 @@ def parse_meal_type(row: pd.Series) -> str:
     if "晚餐" in meal_title or "晚饭" in meal_title or "晚" in meal_title or "夜" in meal_title:
         return "晚餐"
     
-    return "其他"
+    return t['other']
 
 
 def extract_ingredients_summary(ingredients_data: Any) -> Dict[str, Any]:
@@ -462,18 +488,21 @@ def extract_ingredients_summary(ingredients_data: Any) -> Dict[str, Any]:
     }
 
 
-def group_food_logs_by_meal(food_logs_df: pd.DataFrame) -> Dict[str, List[pd.Series]]:
+def group_food_logs_by_meal(food_logs_df: pd.DataFrame, language: str = 'zh') -> Dict[str, List[pd.Series]]:
     """
     Group food logs by meal type.
     按餐次类型分组食物日志。
     
+    Args:
+        language: 'zh' for Chinese, 'en' for English
+    
     Returns:
-        Dict with keys: "早餐", "午餐", "晚餐", "其他"
+        Dict with keys: "早餐"/"Breakfast", "午餐"/"Lunch", "晚餐"/"Dinner", "其他"/"Other"
     """
     grouped = defaultdict(list)
     
     for _, row in food_logs_df.iterrows():
-        meal_type = parse_meal_type(row)
+        meal_type = parse_meal_type(row, language=language)
         grouped[meal_type].append(row)
     
     return dict(grouped)
@@ -486,55 +515,100 @@ def generate_html_summary(
     date: str,
     patient_id: str,
     use_data_uri: bool = True,
-    image_base_url: Optional[str] = None
+    image_base_url: Optional[str] = None,
+    language: str = 'zh'
 ) -> str:
     """
     Generate HTML summary similar to the attached image format.
     生成类似附图的HTML总结。
     """
     
+    # Translations
+    labels = {
+        'zh': {
+            'patient_info': '患者信息',
+            'years_old': '岁',
+            'male': '男性',
+            'female': '女性',
+            'weight': '体重',
+            'height': '身高',
+            'medical_history': '疾病史',
+            'ethnicity': '民族',
+            'region': '地域',
+            'exercise_intensity': '运动强度',
+            'medications': '当前用药',
+            'food_log_summary': 'AI 1日食物日志总结',
+            'total_calories': '总热量',
+            'kcal': 'kcal',
+            'main_ingredients': '主要食材',
+            'notes': '备注',
+            'no_food_logs': '该日期没有食物日志记录'
+        },
+        'en': {
+            'patient_info': 'Patient Information',
+            'years_old': ' years old',
+            'male': 'Male',
+            'female': 'Female',
+            'weight': 'Weight',
+            'height': 'Height',
+            'medical_history': 'Medical History',
+            'ethnicity': 'Ethnicity',
+            'region': 'Region',
+            'exercise_intensity': 'Exercise Intensity',
+            'medications': 'Current Medications',
+            'food_log_summary': 'AI 1-Day Food Log Summary',
+            'total_calories': 'Total Calories',
+            'kcal': 'kcal',
+            'main_ingredients': 'Main Ingredients',
+            'notes': 'Notes',
+            'no_food_logs': 'No food log records for this date'
+        }
+    }
+    t = labels.get(language, labels['zh'])
+    
     # Patient info section
-    patient_info_html = """
+    patient_info_html = f"""
     <div class="patient-info">
-        <h2>患者信息</h2>
+        <h2>{t['patient_info']}</h2>
         <ul class="patient-details">
     """
     
     if patient_info.get("age"):
         gender = patient_info.get("gender") or ""
         if gender:
-            gender_text = "男性" if gender.lower() in ["male", "m", "男"] else "女性" if gender.lower() in ["female", "f", "女"] else ""
+            gender_text = t['male'] if gender.lower() in ["male", "m", "男"] else t['female'] if gender.lower() in ["female", "f", "女"] else ""
         else:
             gender_text = ""
-        patient_info_html += f'<li>{patient_info["age"]}岁{gender_text}</li>'
+        age_suffix = t['years_old'] if language == 'zh' else ''
+        patient_info_html += f'<li>{patient_info["age"]}{age_suffix}{gender_text}</li>'
     
     if patient_info.get("weight") and patient_info.get("height"):
         patient_info_html += f'<li>{patient_info["weight"]}kg {patient_info["height"]}cm</li>'
     elif patient_info.get("weight"):
-        patient_info_html += f'<li>体重: {patient_info["weight"]}kg</li>'
+        patient_info_html += f'<li>{t["weight"]}: {patient_info["weight"]}kg</li>'
     elif patient_info.get("height"):
-        patient_info_html += f'<li>身高: {patient_info["height"]}cm</li>'
+        patient_info_html += f'<li>{t["height"]}: {patient_info["height"]}cm</li>'
     
     if patient_info.get("bmi"):
         patient_info_html += f'<li>BMI: {patient_info["bmi"]}</li>'
     
     if patient_info.get("medical_history"):
         medical_history = str(patient_info["medical_history"])
-        patient_info_html += f'<li>疾病史: {html.escape(medical_history)}</li>'
+        patient_info_html += f'<li>{t["medical_history"]}: {html.escape(medical_history)}</li>'
     
     if patient_info.get("ethnicity"):
-        patient_info_html += f'<li>民族: {html.escape(str(patient_info["ethnicity"]))}</li>'
+        patient_info_html += f'<li>{t["ethnicity"]}: {html.escape(str(patient_info["ethnicity"]))}</li>'
     
     if patient_info.get("region"):
-        patient_info_html += f'<li>地域: {html.escape(str(patient_info["region"]))}</li>'
+        patient_info_html += f'<li>{t["region"]}: {html.escape(str(patient_info["region"]))}</li>'
     
     if patient_info.get("exercise_intensity"):
         exercise = str(patient_info["exercise_intensity"])
-        patient_info_html += f'<li>运动强度: {html.escape(exercise)}</li>'
+        patient_info_html += f'<li>{t["exercise_intensity"]}: {html.escape(exercise)}</li>'
     
     if patient_info.get("medications"):
         medications = str(patient_info["medications"])
-        patient_info_html += f'<li>当前用药: {html.escape(medications)}</li>'
+        patient_info_html += f'<li>{t["medications"]}: {html.escape(medications)}</li>'
     
     patient_info_html += """
         </ul>
@@ -542,9 +616,13 @@ def generate_html_summary(
     """
     
     # Food log summary section
-    meal_order = ["早餐", "午餐", "晚餐", "其他"]
+    if language == 'zh':
+        meal_order = ["早餐", "午餐", "晚餐", "其他"]
+    else:
+        meal_order = ["Breakfast", "Lunch", "Dinner", "Other"]
+    
     food_log_html = '<div class="food-log-summary">'
-    food_log_html += f'<h2>AI 1日食物日志总结</h2>'
+    food_log_html += f'<h2>{t["food_log_summary"]}</h2>'
     
     # Calculate total calories if possible
     total_calories_info = ""
@@ -638,7 +716,7 @@ def generate_html_summary(
         # Display ingredients
         if all_ingredients:
             food_log_html += '<div class="main-ingredients">'
-            food_log_html += '<div class="ingredients-label">主要食材：</div>'
+            food_log_html += f'<div class="ingredients-label">{t["main_ingredients"]}:</div>'
             food_log_html += '<ul class="ingredients-list">'
             for ing in all_ingredients:
                 name = html.escape(str(ing.get("name", "")))
