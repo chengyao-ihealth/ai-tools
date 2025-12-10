@@ -193,28 +193,13 @@ HTML_TEMPLATE = """
             font-weight: 600;
             color: #555;
         }
-        select {
+        select, input[type="date"] {
             width: 100%;
             padding: 10px;
             border: 2px solid #e0e0e0;
             border-radius: 6px;
             font-size: 14px;
             font-family: inherit;
-        }
-        input[type="date"] {
-            padding: 10px;
-            border: 2px solid #e0e0e0;
-            border-radius: 6px;
-            font-size: 14px;
-            font-family: inherit;
-        }
-        .language-switch .lang-option.active {
-            background: #4a90e2 !important;
-            color: white !important;
-        }
-        .language-switch .lang-option:not(.active) {
-            background: white !important;
-            color: #4a90e2 !important;
         }
         select:focus, input[type="date"]:focus {
             outline: none;
@@ -306,38 +291,31 @@ HTML_TEMPLATE = """
 </head>
 <body>
     <div class="container">
-        <h1 id="pageTitle">食物日志总结生成器</h1>
+        <h1>食物日志总结生成器</h1>
         
         <form id="summaryForm">
             <div class="form-group">
-                <label for="patientSelect" id="patientLabel">选择病人 ID:</label>
+                <label for="patientSelect">选择病人 ID:</label>
                 <select id="patientSelect" name="patient_id" required>
                     <option value="">加载中...</option>
                 </select>
                 <div class="patient-info-display" id="patientInfo" style="display: none;">
-                    <div id="foodLogCountLabel">食物日志数量: <span id="foodLogCount">-</span></div>
-                    <div id="earliestDateLabel">最早日期: <span id="earliestDate">-</span></div>
-                    <div id="latestDateLabel">最晚日期: <span id="latestDate">-</span></div>
+                    <div>食物日志数量: <span id="foodLogCount">-</span></div>
+                    <div>最早日期: <span id="earliestDate">-</span></div>
+                    <div>最晚日期: <span id="latestDate">-</span></div>
                 </div>
             </div>
             
             <div class="form-group">
-                <label for="dateSelect" id="dateLabel">选择日期:</label>
-                <div style="display: flex; align-items: center; gap: 10px;">
-                    <input type="date" id="dateSelect" name="date" required style="flex: 1; max-width: 200px;"/>
-                    <div id="datesWithFoodLogs" style="font-size: 12px; color: #666; cursor: pointer; display: none;" title="点击查看有食物日志的日期">
-                        <span id="datesIndicator" style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #4a90e2; margin-right: 5px;"></span>
-                        <span id="datesCount">0</span>
-                    </div>
-                    <div class="language-switch" id="languageSwitch" style="display: flex; border: 2px solid #4a90e2; border-radius: 6px; overflow: hidden; cursor: pointer; user-select: none;">
-                        <span class="lang-option active" data-lang="zh" style="padding: 6px 12px; background: #4a90e2; color: white; font-size: 13px; font-weight: 600;">中</span>
-                        <span class="lang-option" data-lang="en" style="padding: 6px 12px; background: white; color: #4a90e2; font-size: 13px; font-weight: 600;">EN</span>
-                    </div>
-                </div>
-                <div id="datesList" style="display: none; margin-top: 8px; padding: 10px; background: #f8f9fa; border-radius: 4px; font-size: 12px; max-height: 150px; overflow-y: auto;">
-                    <div style="font-weight: 600; margin-bottom: 5px;" id="datesListTitle">有食物日志的日期:</div>
-                    <div id="datesListContent"></div>
-                </div>
+                <label for="dateSelect">选择日期:</label>
+                <input type="date" id="dateSelect" name="date" required/>
+            </div>
+            
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="debugCheckbox" name="debug"/>
+                    Debug模式（显示数据结构）
+                </label>
             </div>
             
             <button type="submit" id="generateBtn">生成总结</button>
@@ -351,225 +329,57 @@ HTML_TEMPLATE = """
         <div class="error" id="error"></div>
         
         <div class="result-container" id="resultContainer">
-            <h2 id="resultTitle">生成的总结</h2>
+            <h2>生成的总结</h2>
             <iframe id="resultFrame" class="result-frame" src=""></iframe>
         </div>
     </div>
     
     <script>
-        // Language translations
-        const translations = {
-            zh: {
-                title: '食物日志总结生成器',
-                selectPatient: '选择病人 ID:',
-                selectDate: '选择日期:',
-                language: 'Language / 语言:',
-                generate: '生成总结',
-                loading: '正在生成食物日志总结，请稍候...',
-                resultTitle: '生成的总结',
-                foodLogCount: '食物日志数量:',
-                earliestDate: '最早日期:',
-                latestDate: '最晚日期:',
-                pleaseSelect: '请选择病人 ID...',
-                loadingText: '加载中...',
-                errorLoading: '加载失败，请刷新页面重试',
-                errorSelect: '请选择病人 ID 和日期',
-                records: '条记录',
-                datesWithFoodLogs: '有食物日志的日期:'
-            },
-            en: {
-                title: 'Food Log Summary Generator',
-                selectPatient: 'Select Patient ID:',
-                selectDate: 'Select Date:',
-                language: 'Language / 语言:',
-                generate: 'Generate Summary',
-                loading: 'Generating food log summary, please wait...',
-                resultTitle: 'Generated Summary',
-                foodLogCount: 'Food Log Count:',
-                earliestDate: 'Earliest Date:',
-                latestDate: 'Latest Date:',
-                pleaseSelect: 'Please select Patient ID...',
-                loadingText: 'Loading...',
-                errorLoading: 'Failed to load, please refresh and try again',
-                errorSelect: 'Please select Patient ID and Date',
-                records: ' records',
-                datesWithFoodLogs: 'Dates with food logs:'
-            }
-        };
-        
-        let currentLang = localStorage.getItem('language') || 'zh';
-        
-        // Update UI language
-        function updateLanguage(lang) {
-            currentLang = lang;
-            localStorage.setItem('language', lang);
-            const t = translations[lang];
-            
-            document.getElementById('pageTitle').textContent = t.title;
-            document.getElementById('patientLabel').textContent = t.selectPatient;
-            document.getElementById('dateLabel').textContent = t.selectDate;
-            if (typeof updateDatesListTitle === 'function') {
-                updateDatesListTitle();
-            }
-            document.getElementById('generateBtn').textContent = t.generate;
-            document.querySelector('#loading div:last-child').textContent = t.loading;
-            document.getElementById('resultTitle').textContent = t.resultTitle;
-            
-            const patientInfo = document.getElementById('patientInfo');
-            if (patientInfo) {
-                const foodLogCountEl = document.getElementById('foodLogCount');
-                const earliestDateEl = document.getElementById('earliestDate');
-                const latestDateEl = document.getElementById('latestDate');
-                const count = foodLogCountEl ? foodLogCountEl.textContent : '-';
-                const earliest = earliestDateEl ? earliestDateEl.textContent : '-';
-                const latest = latestDateEl ? latestDateEl.textContent : '-';
-                
-                document.getElementById('foodLogCountLabel').innerHTML = `${t.foodLogCount} <span id="foodLogCount">${count}</span>`;
-                document.getElementById('earliestDateLabel').innerHTML = `${t.earliestDate} <span id="earliestDate">${earliest}</span>`;
-                document.getElementById('latestDateLabel').innerHTML = `${t.latestDate} <span id="latestDate">${latest}</span>`;
-            }
-            
-            // Update patient select placeholder
-            const select = document.getElementById('patientSelect');
-            if (select.options.length > 0 && !select.value) {
-                select.options[0].textContent = t.pleaseSelect;
-            }
-        }
-        
-        // Language switch click handler
-        document.querySelectorAll('.lang-option').forEach(option => {
-            option.addEventListener('click', function() {
-                const lang = this.dataset.lang;
-                if (lang !== currentLang) {
-                    currentLang = lang;
-                    localStorage.setItem('language', lang);
-                    
-                    // Update active state
-                    document.querySelectorAll('.lang-option').forEach(opt => {
-                        opt.classList.remove('active');
-                    });
-                    this.classList.add('active');
-                    
-                    updateLanguage(lang);
-                    // Reload patient IDs to update text
-                    loadPatientIDs();
-                    
-                    // Reload dates with food logs if patient is selected
-                    const patientId = document.getElementById('patientSelect').value;
-                    if (patientId) {
-                        loadDatesWithFoodLogs(patientId);
-                    }
-                }
-            });
-        });
-        
-        // Initialize language
-        document.querySelector(`.lang-option[data-lang="${currentLang}"]`).classList.add('active');
-        updateLanguage(currentLang);
-        
         // Set today as default date
         document.getElementById('dateSelect').valueAsDate = new Date();
         
         // Load patient IDs
-        function loadPatientIDs() {
-            const t = translations[currentLang];
-            fetch('/api/patient-ids')
-                .then(response => response.json())
-                .then(data => {
-                    const select = document.getElementById('patientSelect');
-                    select.innerHTML = `<option value="">${t.loadingText}</option>`;
-                    
-                    if (data.error) {
-                        select.innerHTML = `<option value="">${t.errorLoading}: ${data.error}</option>`;
-                        return;
-                    }
-                    
-                    select.innerHTML = `<option value="">${t.pleaseSelect}</option>`;
-                    data.patients.forEach(patient => {
-                        const option = document.createElement('option');
-                        option.value = patient.patient_id;
-                        option.textContent = `${patient.patient_id} (${patient.food_log_count} ${t.records})`;
-                        option.dataset.count = patient.food_log_count;
-                        option.dataset.earliest = patient.earliest_date || '';
-                        option.dataset.latest = patient.latest_date || '';
-                        select.appendChild(option);
-                    });
-                    
-                    // Update patient info when selection changes
-                    select.addEventListener('change', function() {
-                        const option = this.options[this.selectedIndex];
-                        if (option.value) {
-                            document.getElementById('foodLogCount').textContent = option.dataset.count;
-                            const locale = currentLang === 'zh' ? 'zh-CN' : 'en-US';
-                            document.getElementById('earliestDate').textContent = 
-                                option.dataset.earliest ? new Date(option.dataset.earliest).toLocaleDateString(locale) : '-';
-                            document.getElementById('latestDate').textContent = 
-                                option.dataset.latest ? new Date(option.dataset.latest).toLocaleDateString(locale) : '-';
-                            document.getElementById('patientInfo').style.display = 'block';
-                            
-                            // Load dates with food logs for this patient
-                            loadDatesWithFoodLogs(option.value);
-                        } else {
-                            document.getElementById('patientInfo').style.display = 'none';
-                            document.getElementById('datesWithFoodLogs').style.display = 'none';
-                            document.getElementById('datesList').style.display = 'none';
-                        }
-                    });
-                })
-                .catch(error => {
-                    console.error('Error loading patient IDs:', error);
-                    const t = translations[currentLang];
-                    document.getElementById('patientSelect').innerHTML = 
-                        `<option value="">${t.errorLoading}</option>`;
+        fetch('/api/patient-ids')
+            .then(response => response.json())
+            .then(data => {
+                const select = document.getElementById('patientSelect');
+                select.innerHTML = '<option value="">请选择病人 ID...</option>';
+                
+                if (data.error) {
+                    select.innerHTML = `<option value="">错误: ${data.error}</option>`;
+                    return;
+                }
+                
+                data.patients.forEach(patient => {
+                    const option = document.createElement('option');
+                    option.value = patient.patient_id;
+                    option.textContent = `${patient.patient_id} (${patient.food_log_count} 条记录)`;
+                    option.dataset.count = patient.food_log_count;
+                    option.dataset.earliest = patient.earliest_date || '';
+                    option.dataset.latest = patient.latest_date || '';
+                    select.appendChild(option);
                 });
-        }
-        
-        loadPatientIDs();
-        
-        // Load dates with food logs for selected patient
-        function loadDatesWithFoodLogs(patientId) {
-            const t = translations[currentLang];
-            fetch(`/api/patient-dates?patient_id=${patientId}`)
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success && data.dates && data.dates.length > 0) {
-                        document.getElementById('datesCount').textContent = data.dates.length;
-                        document.getElementById('datesWithFoodLogs').style.display = 'inline-block';
-                        
-                        // Populate dates list
-                        const datesListContent = document.getElementById('datesListContent');
-                        datesListContent.innerHTML = '';
-                        data.dates.forEach(dateStr => {
-                            const dateItem = document.createElement('div');
-                            dateItem.style.cssText = 'padding: 4px 0; cursor: pointer; color: #4a90e2;';
-                            dateItem.textContent = dateStr;
-                            dateItem.addEventListener('click', function() {
-                                document.getElementById('dateSelect').value = dateStr;
-                                document.getElementById('datesList').style.display = 'none';
-                            });
-                            datesListContent.appendChild(dateItem);
-                        });
+                
+                // Update patient info when selection changes
+                select.addEventListener('change', function() {
+                    const option = this.options[this.selectedIndex];
+                    if (option.value) {
+                        document.getElementById('foodLogCount').textContent = option.dataset.count;
+                        document.getElementById('earliestDate').textContent = 
+                            option.dataset.earliest ? new Date(option.dataset.earliest).toLocaleDateString('zh-CN') : '-';
+                        document.getElementById('latestDate').textContent = 
+                            option.dataset.latest ? new Date(option.dataset.latest).toLocaleDateString('zh-CN') : '-';
+                        document.getElementById('patientInfo').style.display = 'block';
                     } else {
-                        document.getElementById('datesWithFoodLogs').style.display = 'none';
+                        document.getElementById('patientInfo').style.display = 'none';
                     }
-                })
-                .catch(error => {
-                    console.error('Error loading dates:', error);
-                    document.getElementById('datesWithFoodLogs').style.display = 'none';
                 });
-        }
-        
-        // Toggle dates list
-        document.getElementById('datesWithFoodLogs').addEventListener('click', function() {
-            const datesList = document.getElementById('datesList');
-            datesList.style.display = datesList.style.display === 'none' ? 'block' : 'none';
-        });
-        
-        // Update dates list title based on language
-        function updateDatesListTitle() {
-            const t = translations[currentLang];
-            document.getElementById('datesListTitle').textContent = t.datesWithFoodLogs || '有食物日志的日期:';
-        }
+            })
+            .catch(error => {
+                console.error('Error loading patient IDs:', error);
+                document.getElementById('patientSelect').innerHTML = 
+                    '<option value="">加载失败，请刷新页面重试</option>';
+            });
         
         // Handle form submission
         document.getElementById('summaryForm').addEventListener('submit', async function(e) {
@@ -578,9 +388,8 @@ HTML_TEMPLATE = """
             const patientId = document.getElementById('patientSelect').value;
             const date = document.getElementById('dateSelect').value;
             
-            const t = translations[currentLang];
             if (!patientId || !date) {
-                showError(t.errorSelect);
+                showError('请选择病人 ID 和日期');
                 return;
             }
             
@@ -591,6 +400,7 @@ HTML_TEMPLATE = """
             document.getElementById('generateBtn').disabled = true;
             
             try {
+                const debugMode = document.getElementById('debugCheckbox').checked;
                 const response = await fetch('/api/generate-summary', {
                     method: 'POST',
                     headers: {
@@ -599,7 +409,7 @@ HTML_TEMPLATE = """
                     body: JSON.stringify({
                         patient_id: patientId,
                         date: date,
-                        language: currentLang
+                        debug: debugMode
                     })
                 });
                 
@@ -613,12 +423,47 @@ HTML_TEMPLATE = """
                     frame.srcdoc = data.html;
                     document.getElementById('resultContainer').classList.add('active');
                     
+                    // Show debug info if available
+                    if (data.debug) {
+                        console.log('=== Debug Information ===');
+                        console.log('Patient Info:', data.debug.patient_info);
+                        console.log('Food Logs Count:', data.debug.food_logs_count);
+                        console.log('Food Logs Columns:', data.debug.food_logs_columns);
+                        console.log('Sample Food Log:', data.debug.sample_food_log);
+                        console.log('Food Logs by Meal:', data.debug.food_logs_by_meal);
+                        console.log('Image Info:', data.debug.image_info);
+                        console.log('API Responses:', data.debug.api_responses);
+                        console.log('========================');
+                        
+                        // Also show in an alert or debug div
+                        let debugText = '=== Debug Information ===\\n\\n';
+                        debugText += 'Food Logs Count: ' + data.debug.food_logs_count + '\\n';
+                        debugText += 'Columns: ' + data.debug.food_logs_columns.join(', ') + '\\n\\n';
+                        debugText += 'Food Logs by Meal:\\n';
+                        for (const [meal, count] of Object.entries(data.debug.food_logs_by_meal)) {
+                            debugText += '  ' + meal + ': ' + count + '\\n';
+                        }
+                        debugText += '\\nImage Info:\\n';
+                        debugText += '  Total Images: ' + data.debug.image_info.total_images + '\\n';
+                        debugText += '  Downloaded: ' + data.debug.image_info.images_downloaded + '\\n';
+                        debugText += '\\nAPI Responses:\\n';
+                        if (data.debug.api_responses && Object.keys(data.debug.api_responses).length > 0) {
+                            for (const [foodLogId, response] of Object.entries(data.debug.api_responses)) {
+                                debugText += '  FoodLog ' + foodLogId + ': ' + JSON.stringify(response, null, 2).substring(0, 500) + '...\\n';
+                            }
+                        } else {
+                            debugText += '  No API responses collected\\n';
+                        }
+                        debugText += '\\nSee browser console (F12) for full details.';
+                        
+                        alert(debugText);
+                    }
+                    
                     // Scroll to result
                     frame.scrollIntoView({ behavior: 'smooth' });
                 }
             } catch (error) {
-                const t = translations[currentLang];
-                showError((currentLang === 'zh' ? '生成失败: ' : 'Generation failed: ') + error.message);
+                showError('生成失败: ' + error.message);
             } finally {
                 document.getElementById('loading').classList.remove('active');
                 document.getElementById('generateBtn').disabled = false;
@@ -661,59 +506,6 @@ def api_patient_ids():
         }), 500
 
 
-@app.route('/api/patient-dates')
-def api_patient_dates():
-    """API endpoint to get all dates that have food logs for a specific patient."""
-    try:
-        patient_id = request.args.get('patient_id')
-        if not patient_id:
-            return jsonify({
-                "success": False,
-                "error": "Missing patient_id parameter"
-            }), 400
-        
-        client = get_mongo_client(MONGO_URI)
-        db = client[DATABASE_NAME]
-        collection = db["food_logs"]
-        
-        # Query distinct dates for this patient
-        pipeline = [
-            {
-                "$match": {
-                    "memberId": patient_id
-                }
-            },
-            {
-                "$group": {
-                    "_id": {
-                        "$dateToString": {
-                            "format": "%Y-%m-%d",
-                            "date": "$createdAt"
-                        }
-                    }
-                }
-            },
-            {
-                "$sort": {"_id": -1}  # Latest first
-            }
-        ]
-        
-        results = list(collection.aggregate(pipeline))
-        dates = [doc["_id"] for doc in results]
-        
-        client.close()
-        
-        return jsonify({
-            "success": True,
-            "dates": dates
-        })
-    except Exception as e:
-        return jsonify({
-            "success": False,
-            "error": str(e)
-        }), 500
-
-
 @app.route('/api/generate-summary', methods=['POST'])
 def api_generate_summary():
     """API endpoint to generate food log summary."""
@@ -721,7 +513,7 @@ def api_generate_summary():
         data = request.json
         patient_id = data.get('patient_id')
         date_str = data.get('date')
-        language = data.get('language', 'zh')  # Default to Chinese
+        debug = data.get('debug', False)
         
         if not patient_id or not date_str:
             return jsonify({"error": "Missing patient_id or date"}), 400
@@ -759,16 +551,100 @@ def api_generate_summary():
             # Setup images directory
             IMAGES_DIR.mkdir(parents=True, exist_ok=True)
             
+            # Download images if session token is provided
+            # Note: This will also try to extract images from MongoDB images field
+            if debug:
+                print(f"[DEBUG] Before image download - ImgName column exists: {'ImgName' in food_logs_df.columns}")
+                if 'images' in food_logs_df.columns:
+                    print(f"[DEBUG] Sample images field: {food_logs_df.iloc[0]['images'] if not food_logs_df.empty else 'N/A'}")
+            
             # Get image URLs from API
+            api_responses = {}
             if SESSION_TOKEN:
-                food_logs_df, _ = get_food_log_image_urls(
+                if debug:
+                    print("[DEBUG] Debug mode: ON - will show detailed FoodLog ID information")
+                food_logs_df, api_responses = get_food_log_image_urls(
                     food_logs_df,
                     SESSION_TOKEN,
-                    debug=False
+                    debug=debug
                 )
+            
+            if debug:
+                print(f"[DEBUG] After image download - ImgName column: {food_logs_df['ImgName'].tolist() if 'ImgName' in food_logs_df.columns else 'Not found'}")
             
             # Group by meal type
             food_logs_by_meal = group_food_logs_by_meal(food_logs_df)
+            
+            # Prepare debug info if requested
+            debug_info = {}
+            if debug:
+                debug_info = {
+                    "patient_info": patient_info,
+                    "food_logs_count": len(food_logs_df),
+                    "food_logs_columns": list(food_logs_df.columns),
+                    "sample_food_log": None,
+                    "food_logs_by_meal": {},
+                    "image_info": {},
+                    "api_responses": api_responses  # Add raw API responses
+                }
+                
+                # Sample food log (first row)
+                if not food_logs_df.empty:
+                    sample_row = food_logs_df.iloc[0]
+                    sample_data = {}
+                    for col in food_logs_df.columns:
+                        val = sample_row[col]
+                        # Handle different data types safely
+                        try:
+                            if pd.isna(val):
+                                sample_data[col] = None
+                            elif isinstance(val, (list, dict)):
+                                # Convert list/dict to JSON string for display
+                                sample_data[col] = json.dumps(val, ensure_ascii=False, default=str)[:500]
+                            else:
+                                sample_data[col] = str(val)[:200]
+                        except (TypeError, ValueError):
+                            # If conversion fails, try to stringify anyway
+                            try:
+                                sample_data[col] = str(val)[:200]
+                            except:
+                                sample_data[col] = f"<unable to convert type {type(val)}>"
+                    debug_info["sample_food_log"] = sample_data
+                
+                # Food logs by meal type
+                for meal_type, rows in food_logs_by_meal.items():
+                    debug_info["food_logs_by_meal"][meal_type] = len(rows)
+                
+                # Image information
+                image_info = {
+                    "total_images": 0,
+                    "images_downloaded": 0,
+                    "image_files": []
+                }
+                
+                for _, row in food_logs_df.iterrows():
+                    img_names_str = str(row.get("ImgName", "") or "").strip()
+                    if img_names_str:
+                        img_names = [x.strip() for x in img_names_str.split(";") if x.strip()]
+                        image_info["total_images"] += len(img_names)
+                        for img_name in img_names:
+                            img_path = IMAGES_DIR / img_name
+                            if img_path.exists():
+                                image_info["images_downloaded"] += 1
+                                image_info["image_files"].append({
+                                    "name": img_name,
+                                    "path": str(img_path),
+                                    "size": img_path.stat().st_size,
+                                    "exists": True
+                                })
+                            else:
+                                image_info["image_files"].append({
+                                    "name": img_name,
+                                    "path": str(img_path),
+                                    "exists": False
+                                })
+                
+                debug_info["image_info"] = image_info
             
             # Generate HTML (use data URI for images in iframe)
             html_content = generate_html_summary(
@@ -778,8 +654,7 @@ def api_generate_summary():
                 date_str,
                 patient_id,
                 use_data_uri=True,  # Use data URI for iframe compatibility
-                image_base_url=None,
-                language=language
+                image_base_url=None
             )
             
             client.close()
@@ -788,6 +663,9 @@ def api_generate_summary():
                 "success": True,
                 "html": html_content
             }
+            
+            if debug:
+                response["debug"] = debug_info
             
             return jsonify(response)
             
