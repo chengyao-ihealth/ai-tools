@@ -15,11 +15,12 @@ import json
 import base64
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from collections import defaultdict
 
 import pandas as pd
 import httpx
+from httpx import HTTPStatusError
 
 try:
     from pymongo import MongoClient
@@ -40,7 +41,9 @@ except ImportError:
     print("[ERROR] Could not import from query_food_logs. Make sure query_food_logs.py is in the same directory.", file=sys.stderr)
     sys.exit(1)
 
-API_BASE = "https://uc-prod.ihealth-eng.com/v1/uc/food-log"
+# API base URL from environment variable
+UC_BACKEND_API_BASE_URL = os.getenv("UC_BACKEND_API_BASE_URL", "https://uc-prod.ihealth-eng.com/v1/uc")
+API_BASE = f"{UC_BACKEND_API_BASE_URL}/food-log"
 
 
 # Helper functions from download_images.py (included here to avoid import issues)
@@ -67,21 +70,64 @@ def guess_ext_from_url(url: str) -> str:
     return ".jpg"
 
 
-def extract_links(payload: dict):
-    """Extract image links from API payload."""
+def extract_links(payload: dict, debug: bool = False):
+    """Extract image links from API payload.
+    Images are in data.images[].link (NOT fileKey)
+    """
+    if not payload or not isinstance(payload, dict):
+        if debug:
+            print(f"[DEBUG] extract_links: payload is not a dict or is None")
+        return []
+    
+    # Get data.images structure
     data = payload.get("data", {})
+    if not isinstance(data, dict):
+        if debug:
+            print(f"[DEBUG] extract_links: data is not a dict, type: {type(data)}")
+        return []
+    
     images = data.get("images", [])
+    if debug:
+        print(f"[DEBUG] extract_links: images type: {type(images)}, value: {images}")
+    
     links = []
     if isinstance(images, list):
-        for item in images:
-            if isinstance(item, dict) and "link" in item:
-                links.append(item["link"])
+        if debug:
+            print(f"[DEBUG] extract_links: Found {len(images)} image(s) in images array")
+        for i, item in enumerate(images):
+            if debug:
+                print(f"[DEBUG] extract_links: Processing image {i+1}, type: {type(item)}")
+            if isinstance(item, dict):
+                if "link" in item:
+                    link = item["link"]
+                    if debug:
+                        print(f"[DEBUG] extract_links: Image {i+1} - Found 'link' key, value: {link[:100] if isinstance(link, str) and len(link) > 100 else link}")
+                    if link and isinstance(link, str):
+                        links.append(link.strip() if link.strip() else link)
+                    elif debug:
+                        print(f"[DEBUG] extract_links: Image {i+1} - 'link' is empty or not a string")
+                else:
+                    if debug:
+                        print(f"[DEBUG] extract_links: Image {i+1} - No 'link' key, available keys: {list(item.keys())}")
             elif isinstance(item, str):
+                if debug:
+                    print(f"[DEBUG] extract_links: Image {i+1} - Item is a string (direct link): {item[:100]}")
                 links.append(item)
     elif isinstance(images, dict) and "link" in images:
+        if debug:
+            print(f"[DEBUG] extract_links: images is a dict with 'link' key")
         links.append(images["link"])
     elif isinstance(images, str):
+        if debug:
+            print(f"[DEBUG] extract_links: images is a string (direct link)")
         links.append(images)
+    else:
+        if debug:
+            print(f"[DEBUG] extract_links: images is not a list/dict/string, cannot extract links")
+    
+    if debug:
+        print(f"[DEBUG] extract_links: Returning {len(links)} link(s)")
+    
     return links
 
 
@@ -158,99 +204,41 @@ def get_patient_info(client: MongoClient, patient_id: str, database_name: str = 
     return patient_info
 
 
-def extract_image_links_from_row(row: pd.Series, s3_base_url: Optional[str] = None) -> List[str]:
-    """
-    Extract image links from food log row.
-    从食物日志行提取图片链接。
-    
-    Args:
-        row: Food log row
-        s3_base_url: Base URL for S3/fileKey images (e.g., "https://s3.amazonaws.com/bucket" or API endpoint)
-    
-    Returns:
-        List of image URLs
-    """
-    links = []
-    
-    # Try images field first (from MongoDB)
-    images_data = row.get("images")
-    if images_data is not None:
-        # Handle pandas NaN
-        try:
-            if pd.isna(images_data):
-                return links
-        except (TypeError, ValueError):
-            # pd.isna might fail for list/dict types, continue
-            pass
-        
-        if isinstance(images_data, list):
-            for item in images_data:
-                if isinstance(item, dict):
-                    # Try different possible keys
-                    link = (item.get("link") or 
-                           item.get("url") or 
-                           item.get("src") or 
-                           item.get("fileUrl") or
-                           item.get("imageUrl"))
-                    
-                    # If no direct URL, try fileKey (S3 key)
-                    if not link and item.get("fileKey"):
-                        file_key = item.get("fileKey")
-                        # Return fileKey as-is, download function will handle URL construction
-                        link = file_key
-                    
-                    if link:
-                        links.append(str(link))
-                elif isinstance(item, str):
-                    links.append(item)
-        elif isinstance(images_data, dict):
-            link = (images_data.get("link") or 
-                   images_data.get("url") or 
-                   images_data.get("src") or
-                   images_data.get("fileUrl") or
-                   images_data.get("imageUrl"))
-            
-            # Try fileKey
-            if not link and images_data.get("fileKey"):
-                file_key = images_data.get("fileKey")
-                if s3_base_url:
-                    link = f"{s3_base_url.rstrip('/')}/{file_key.lstrip('/')}"
-                else:
-                    link = file_key
-            
-            if link:
-                links.append(str(link))
-        elif isinstance(images_data, str):
-            links.append(images_data)
-    
-    return links
+# Removed extract_image_links_from_row - we'll get images directly from API
 
 
-def download_food_log_images(
+def get_food_log_image_urls(
     food_logs_df: pd.DataFrame,
-    output_dir: Path,
     session_token: Optional[str],
-    images_dir: Path
-) -> pd.DataFrame:
+    debug: bool = False
+) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """
-    Download images for food logs and add ImgName column.
-    下载食物日志的图片并添加ImgName列。
+    Get image URLs for food logs from API.
+    从API获取食物日志的图片URL。
+    
+    Logic: For each food log ID, call GET {UC_BACKEND_API_BASE_URL}/food-log/{foodLogId}
+    Images are in data.images[].link - directly use these URLs, no download needed.
     
     Args:
-        food_logs_df: DataFrame with food logs (must have _id or FoodLogId column)
-        output_dir: Output directory for images
-        session_token: Session token for API (optional)
-        images_dir: Images directory path
+        food_logs_df: DataFrame with food logs (must have _id column)
+        session_token: Session token for API (required)
+        debug: Enable debug mode
         
     Returns:
-        DataFrame with ImgName column added
+        Tuple of (DataFrame with ImageURLs column added, dict of raw API responses for debug)
     """
+    api_responses = {}  # Store raw API responses for debug
+    
+    if not session_token:
+        print("[WARN] No session token provided, cannot get image URLs from API")
+        return food_logs_df, api_responses
+    
+    if "ImageURLs" not in food_logs_df.columns:
+        food_logs_df["ImageURLs"] = None
     if "ImgName" not in food_logs_df.columns:
         food_logs_df["ImgName"] = ""
     
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Determine ID column
+    # Determine ID column (use _id from MongoDB)
     id_col = None
     for col in ["_id", "FoodLogId", "foodLogId"]:
         if col in food_logs_df.columns:
@@ -258,8 +246,8 @@ def download_food_log_images(
             break
     
     if not id_col:
-        print("[WARN] No food log ID column found, skipping image download")
-        return food_logs_df
+        print("[WARN] No food log ID column found, skipping image URL retrieval")
+        return food_logs_df, api_responses
     
     with httpx.Client(timeout=15) as client:
         for idx, row in food_logs_df.iterrows():
@@ -267,53 +255,98 @@ def download_food_log_images(
             if not fid or fid.lower() == "nan":
                 continue
             
-            # Check if images already exist
-            existing_images = str(row.get("ImgName", "")).strip()
-            if existing_images:
-                # Check if files exist
-                img_names = [x.strip() for x in existing_images.split(";") if x.strip()]
-                if all((images_dir / name).exists() for name in img_names if name):
-                    continue
+            if debug:
+                print(f"[DEBUG] Processing FoodLog ID: {fid}")
             
-            # Try to extract links from images field first
-            links = extract_image_links_from_row(row)
+            # Skip if already has URLs
+            if pd.notna(row.get("ImageURLs")):
+                if debug:
+                    print(f"[DEBUG] FoodLog {fid}: Already has image URLs, skipping")
+                continue
             
-            # Check if we have fileKey-style links (not full HTTP URLs)
-            has_filekey_only = links and all(not link.startswith('http') for link in links)
+            # Call API: GET {UC_BACKEND_API_BASE_URL}/food-log/{foodLogId}
+            url = f"{API_BASE}/{fid}"
+            if debug:
+                print(f"[DEBUG] FoodLog {fid}: Calling API: {url}")
             
-            # If no links found, or we only have fileKey links, use API to get full URLs
-            # This is the method from download_images.py - call API to get full image URLs
-            if (not links or has_filekey_only) and session_token:
-                url = f"{API_BASE}/{fid}"
-                try:
-                    resp = client.get(url, headers=make_headers(session_token))
-                    resp.raise_for_status()
-                    payload = resp.json()
-                    # Use extract_links function (same as download_images.py)
-                    api_links = extract_links(payload)
-                    if api_links:
-                        # These are full HTTP URLs from API, use them directly
-                        links = api_links
-                        print(f"[DEBUG] Got {len(links)} image URL(s) from API for {fid}")
-                    else:
-                        print(f"[WARN] No image links found in API response for {fid}")
-                except Exception as e:
-                    print(f"[WARN] Failed to fetch food log {fid} from API: {e}")
-            
-            # Filter to only keep HTTP URLs (remove any non-URL entries like fileKey)
-            if links:
-                links = [link for link in links if link.startswith('http://') or link.startswith('https://')]
-            
-            # Store image URLs directly (don't download to local)
-            # We'll use these URLs directly in HTML
-            if links:
-                # Store full URLs in ImgName column (semicolon-separated for multiple images)
-                food_logs_df.at[idx, "ImgName"] = ";".join(links)
-                # Also store as list for easier access in HTML generation
-                food_logs_df.at[idx, "ImageURLs"] = links
-                print(f"[OK] Got {len(links)} image URL(s) for {fid} (using directly, not downloading)")
+            try:
+                resp = client.get(url, headers=make_headers(session_token))
+                resp.raise_for_status()
+                payload = resp.json()
+                
+                # Store raw API response for debug
+                if debug:
+                    api_responses[fid] = payload
+                
+                if debug:
+                    print(f"[DEBUG] FoodLog {fid}: API response received")
+                    print(f"[DEBUG] FoodLog {fid}: Full payload structure:")
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                    
+                    data = payload.get("data", {})
+                    if isinstance(data, dict):
+                        print(f"[DEBUG] FoodLog {fid}: data structure:")
+                        print(json.dumps(data, indent=2, ensure_ascii=False))
+                        
+                        images = data.get("images", [])
+                        print(f"[DEBUG] FoodLog {fid}: Found {len(images) if isinstance(images, list) else 0} image(s) in response")
+                        if isinstance(images, list) and len(images) > 0:
+                            for i, img_item in enumerate(images):
+                                if isinstance(img_item, dict):
+                                    print(f"[DEBUG] FoodLog {fid}: Image {i+1} keys: {list(img_item.keys())}")
+                                    print(f"[DEBUG] FoodLog {fid}: Image {i+1} full data:")
+                                    print(json.dumps(img_item, indent=2, ensure_ascii=False))
+                                    if 'link' in img_item:
+                                        print(f"[DEBUG] FoodLog {fid}: Image {i+1} 'link': {img_item.get('link')[:100]}..." if len(str(img_item.get('link'))) > 100 else f"[DEBUG] FoodLog {fid}: Image {i+1} 'link': {img_item.get('link')}")
+                                    if 'fileKey' in img_item:
+                                        print(f"[DEBUG] FoodLog {fid}: Image {i+1} 'fileKey': {img_item.get('fileKey')} (ignored, using 'link' instead)")
+                
+                # Extract image links from data.images[].link (NOT fileKey)
+                links = extract_links(payload, debug=debug)
+                
+                if links:
+                    # Store URLs directly - no download needed
+                    food_logs_df.at[idx, "ImageURLs"] = links
+                    food_logs_df.at[idx, "ImgName"] = ";".join(links)  # For compatibility
+                    print(f"[OK] FoodLog {fid}: Got {len(links)} image URL(s) from 'link' field")
+                    if debug:
+                        for i, link in enumerate(links):
+                            print(f"[DEBUG] FoodLog {fid}: Image URL {i+1}: {link[:100]}..." if len(link) > 100 else f"[DEBUG] FoodLog {fid}: Image URL {i+1}: {link}")
+                else:
+                    print(f"[WARN] FoodLog {fid}: No 'link' found in data.images[].link")
+                    # Always show raw data when no links found (even without debug mode)
+                    print(f"[DEBUG] FoodLog {fid}: Raw API response data:")
+                    data = payload.get("data", {})
+                    if isinstance(data, dict):
+                        print(json.dumps(data, indent=2, ensure_ascii=False))
+                        images = data.get("images", [])
+                        if images:
+                            print(f"[DEBUG] FoodLog {fid}: images array has {len(images)} items")
+                            if isinstance(images, list) and len(images) > 0:
+                                first_item = images[0]
+                                print(f"[DEBUG] FoodLog {fid}: First image item type: {type(first_item)}")
+                                if isinstance(first_item, dict):
+                                    print(f"[DEBUG] FoodLog {fid}: First image item keys: {list(first_item.keys())}")
+                                    print(f"[DEBUG] FoodLog {fid}: First image item full data:")
+                                    print(json.dumps(first_item, indent=2, ensure_ascii=False))
+                                    print(f"[DEBUG] FoodLog {fid}: Has 'link' key: {'link' in first_item}, Has 'fileKey' key: {'fileKey' in first_item}")
+                                    if 'link' in first_item:
+                                        link_val = first_item.get('link')
+                                        print(f"[DEBUG] FoodLog {fid}: 'link' value type: {type(link_val)}, value: {link_val}")
+                                    if 'fileKey' in first_item:
+                                        print(f"[DEBUG] FoodLog {fid}: 'fileKey' value: {first_item.get('fileKey')} (ignored)")
+            except httpx.HTTPStatusError as e:
+                print(f"[ERROR] FoodLog {fid}: HTTP {e.response.status_code}")
+                if debug:
+                    print(f"[DEBUG] FoodLog {fid}: Response body: {e.response.text[:500]}")
+            except Exception as e:
+                print(f"[WARN] FoodLog {fid}: Failed to get image URLs: {e}")
+                if debug:
+                    import traceback
+                    print(f"[DEBUG] FoodLog {fid}: Exception traceback:")
+                    traceback.print_exc()
     
-    return food_logs_df
+    return food_logs_df, api_responses
 
 
 def parse_meal_type(row: pd.Series) -> str:
@@ -879,6 +912,11 @@ def main():
         default="food_log_summary.html",
         help="Output HTML file / 输出HTML文件"
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug mode to show detailed logs including FoodLog IDs / 启用调试模式显示详细日志包括FoodLog ID"
+    )
     
     args = parser.parse_args()
     
@@ -932,14 +970,16 @@ def main():
         images_dir = Path(args.images_dir)
         images_dir.mkdir(parents=True, exist_ok=True)
         
-        # Download images if session token is provided
+        # Get image URLs from API if session token is provided
+        api_responses = {}
         if session_token:
-            print("[INFO] Downloading images...")
-            food_logs_df = download_food_log_images(
+            print("[INFO] Getting image URLs from API...")
+            if args.debug:
+                print("[DEBUG] Debug mode: ON - will show detailed FoodLog ID information")
+            food_logs_df, api_responses = get_food_log_image_urls(
                 food_logs_df,
-                images_dir,
                 session_token,
-                images_dir
+                debug=args.debug
             )
         
         # Group by meal type

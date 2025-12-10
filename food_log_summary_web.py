@@ -33,10 +33,9 @@ except ImportError:
 from query_food_logs import get_mongo_client, query_food_logs
 from generate_food_log_summary import (
     get_patient_info,
-    download_food_log_images,
+    get_food_log_image_urls,
     group_food_logs_by_meal,
-    generate_html_summary,
-    extract_image_links_from_row
+    generate_html_summary
 )
 
 # Load environment variables
@@ -100,7 +99,7 @@ def get_all_patient_ids_with_food_logs(
                 }
             },
             {
-                "$sort": {"_id": 1}
+                "$sort": {"_id": -1}  # 倒序排列，最新的在最前面
             }
         ]
         
@@ -433,6 +432,7 @@ HTML_TEMPLATE = """
                         console.log('Sample Food Log:', data.debug.sample_food_log);
                         console.log('Food Logs by Meal:', data.debug.food_logs_by_meal);
                         console.log('Image Info:', data.debug.image_info);
+                        console.log('API Responses:', data.debug.api_responses);
                         console.log('========================');
                         
                         // Also show in an alert or debug div
@@ -446,6 +446,14 @@ HTML_TEMPLATE = """
                         debugText += '\\nImage Info:\\n';
                         debugText += '  Total Images: ' + data.debug.image_info.total_images + '\\n';
                         debugText += '  Downloaded: ' + data.debug.image_info.images_downloaded + '\\n';
+                        debugText += '\\nAPI Responses:\\n';
+                        if (data.debug.api_responses && Object.keys(data.debug.api_responses).length > 0) {
+                            for (const [foodLogId, response] of Object.entries(data.debug.api_responses)) {
+                                debugText += '  FoodLog ' + foodLogId + ': ' + JSON.stringify(response, null, 2).substring(0, 500) + '...\\n';
+                            }
+                        } else {
+                            debugText += '  No API responses collected\\n';
+                        }
                         debugText += '\\nSee browser console (F12) for full details.';
                         
                         alert(debugText);
@@ -550,13 +558,16 @@ def api_generate_summary():
                 if 'images' in food_logs_df.columns:
                     print(f"[DEBUG] Sample images field: {food_logs_df.iloc[0]['images'] if not food_logs_df.empty else 'N/A'}")
             
-            # Always try to download/extract images
-            food_logs_df = download_food_log_images(
-                food_logs_df,
-                IMAGES_DIR,
-                SESSION_TOKEN,  # Can be None, will try MongoDB images field first
-                IMAGES_DIR
-            )
+            # Get image URLs from API
+            api_responses = {}
+            if SESSION_TOKEN:
+                if debug:
+                    print("[DEBUG] Debug mode: ON - will show detailed FoodLog ID information")
+                food_logs_df, api_responses = get_food_log_image_urls(
+                    food_logs_df,
+                    SESSION_TOKEN,
+                    debug=debug
+                )
             
             if debug:
                 print(f"[DEBUG] After image download - ImgName column: {food_logs_df['ImgName'].tolist() if 'ImgName' in food_logs_df.columns else 'Not found'}")
@@ -573,7 +584,8 @@ def api_generate_summary():
                     "food_logs_columns": list(food_logs_df.columns),
                     "sample_food_log": None,
                     "food_logs_by_meal": {},
-                    "image_info": {}
+                    "image_info": {},
+                    "api_responses": api_responses  # Add raw API responses
                 }
                 
                 # Sample food log (first row)
