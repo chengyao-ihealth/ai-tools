@@ -310,11 +310,93 @@ def get_glucose_data(client: MongoClient, patient_id: str, database_name: str = 
     return {"has_data": False, "count": 0}
 
 
+# Constants for unit conversion (matching ai-agent-service)
+LBS_TO_KG_RATIO = 0.453592
+INCH_TO_CM_RATIO = 2.54
+
+def race_mapping():
+    """Mapping of race codes to display names (matching ai-agent-service)"""
+    return {
+        'WHITE': 'White',
+        'BAA': 'African American',
+        'ASIAN': 'Asian',
+        'HISPANIC': 'Hispanic',
+        'OTHER': '',
+        'NHOPI': 'Native Hawaiian or Other Pacific Islander',
+        'NOT_TO_SAY': '',
+        'AIAN': 'American Indian or Alaska Native',
+        'MULTIRACIAL': 'Multiracial'
+    }
+
+def diagnoses_mapping():
+    """Mapping of diagnosis codes to display names (matching ai-agent-service)"""
+    return {
+        'CHF': 'CHF',
+        'COPD': 'COPD',
+        'DM': 'DM',
+        'DM2': 'DM2',
+        'DM_OTHERS': 'DM Others',
+        'CKD': 'CKD',
+        'CKF': 'CKD',
+        'RDD': 'RDD',
+        'HYPOTENSION': 'Hypotension',
+        'ESRD_Dialysis': 'ESRD Dialysis',
+        'HLD': 'HLD',
+        'HTN': 'HTN',
+        'OBESITY': 'Obesity',
+        'PRE_DM': 'PreDM',
+    }
+
+def gender_mapping():
+    """Mapping of gender codes to display names"""
+    return {'F': 'Female', 'M': 'Male'}
+
+def calculate_age_from_birthday(birthday: str) -> Optional[int]:
+    """Calculate age from birthday string (format: 'YYYY-MM-DD')"""
+    if not birthday:
+        return None
+    try:
+        birth_date = datetime.strptime(birthday, '%Y-%m-%d')
+        today = datetime.today()
+        age = today.year - birth_date.year - (
+            (today.month, today.day) < (birth_date.month, birth_date.day)
+        )
+        return age
+    except (ValueError, TypeError):
+        return None
+
+def convert_weight_to_kg(weight_value: Optional[float], unit: Optional[str]) -> Optional[str]:
+    """Convert weight to kg if unit is lb/lbs, otherwise return as kg. Returns string with no decimals."""
+    if weight_value is None:
+        return None
+    try:
+        weight_kg = float(weight_value)
+        if unit and unit.lower() in ("lb", "lbs"):
+            weight_kg *= LBS_TO_KG_RATIO
+        return format(weight_kg, ".0f")
+    except (ValueError, TypeError):
+        return None
+
+def convert_height_to_cm(height_value: Optional[float], unit: Optional[str]) -> Optional[str]:
+    """Convert height to cm if unit is inch, otherwise assume cm. Returns string with no decimals."""
+    if height_value is None:
+        return None
+    try:
+        height_cm = float(height_value)
+        if unit and unit.lower() in ("inch", "inches"):
+            height_cm *= INCH_TO_CM_RATIO
+        return format(height_cm, ".0f")
+    except (ValueError, TypeError):
+        return None
+
 def get_patient_info(client: MongoClient, patient_id: str, database_name: str = "UnifiedCare") -> Dict[str, Any]:
     """
-    Get simple patient background information from database.
-    If a patient info summary exists, use it directly.
-    从数据库获取简单的患者背景信息。如果有现成的patient info summary就直接用。
+    Get patient background information from database using the same structure as ai-agent-service.
+    从数据库获取患者背景信息，使用与ai-agent-service相同的结构。
+    
+    This function queries the 'uc_patients' collection and extracts information from the 'profile' subdocument,
+    matching the structure used in the ai-agent-service codebase.
+    此函数查询'uc_patients'集合并从'profile'子文档中提取信息，匹配ai-agent-service代码库中使用的结构。
     
     Args:
         client: MongoDB client
@@ -327,137 +409,141 @@ def get_patient_info(client: MongoClient, patient_id: str, database_name: str = 
     db = client[database_name]
     patient_info = {"patient_id": patient_id}  # Always include patient_id
     
-    # Try to get from patients or members collection
-    # 尝试从patients或members集合获取
-    for collection_name in ["patients", "members", "uc_enrolled_programs"]:
+    # Query uc_patients collection (matching ai-agent-service)
+    collection = db["uc_patients"]
+    
+    try:
+        # Try to convert patient_id to ObjectId
+        query_id = patient_id
         try:
-            collection = db[collection_name]
+            query_id = ObjectId(patient_id)
+        except Exception:
+            pass
+        
+        # Query by _id
+        doc = collection.find_one({"_id": query_id})
+        
+        if not doc:
+            # Try as string if ObjectId failed
+            doc = collection.find_one({"_id": patient_id})
+        
+        if doc:
+            print(f"[INFO] Found document in uc_patients collection")
+            print(f"[DEBUG] Document top-level keys: {list(doc.keys())[:20]}...")
             
-            # Try different ID fields
-            for id_field in ["_id", "patient_id", "memberId", "member_id", "id"]:
-                try:
-                    # Convert patient_id to ObjectId if possible
-                    query_id = patient_id
-                    if id_field == "_id" or id_field == "memberId" or id_field == "id":
+            # Extract from profile subdocument (matching ai-agent-service structure)
+            profile = doc.get("profile") or {}
+            if profile:
+                print(f"[DEBUG] Found profile subdocument with keys: {list(profile.keys())[:20]}...")
+                
+                # Name - from profile.firstName and profile.lastName
+                first_name = profile.get("firstName") or ""
+                last_name = profile.get("lastName") or ""
+                if first_name or last_name:
+                    patient_info["name"] = f"{first_name} {last_name}".strip()
+                
+                # Age - calculate from profile.birthday
+                birthday = profile.get("birthday")
+                if birthday:
+                    age = calculate_age_from_birthday(birthday)
+                    if age is not None:
+                        patient_info["age"] = age
+                
+                # Gender - from profile.gender
+                gender = profile.get("gender")
+                if gender:
+                    patient_info["gender"] = gender
+                    # Also add gender_display
+                    gender_display = gender_mapping().get(gender, gender)
+                    if gender_display:
+                        patient_info["gender_display"] = gender_display
+                
+                # Gender Identity - from profile.genderidentity
+                gender_identity = profile.get("genderidentity")
+                if gender_identity:
+                    patient_info["gender_identity"] = str(gender_identity)
+                
+                # Weight - from profile.weight (object with value, unit, bmi)
+                weight_obj = profile.get("weight")
+                if weight_obj:
+                    weight_value = weight_obj.get("value") if isinstance(weight_obj, dict) else None
+                    weight_unit = weight_obj.get("unit") if isinstance(weight_obj, dict) else None
+                    weight_kg = convert_weight_to_kg(weight_value, weight_unit)
+                    if weight_kg:
+                        patient_info["weight"] = weight_kg
+                
+                # Height - from profile.height (object with value, unit)
+                height_obj = profile.get("height")
+                if height_obj:
+                    height_value = height_obj.get("value") if isinstance(height_obj, dict) else None
+                    height_unit = height_obj.get("unit") if isinstance(height_obj, dict) else None
+                    height_cm = convert_height_to_cm(height_value, height_unit)
+                    if height_cm:
+                        patient_info["height"] = height_cm
+                
+                # BMI - from profile.weight.bmi
+                if weight_obj and isinstance(weight_obj, dict):
+                    bmi = weight_obj.get("bmi")
+                    if bmi is not None:
                         try:
-                            query_id = ObjectId(patient_id)
-                        except Exception:
+                            patient_info["bmi"] = format(float(bmi), '.1f')
+                        except (ValueError, TypeError):
                             pass
-                    
-                    query = {id_field: query_id}
-                    doc = collection.find_one(query)
-                    
-                    if doc:
-                        print(f"[INFO] Found document in {collection_name} collection with field {id_field}")
-                        
-                        # Check for existing patient info summary first
-                        # 先检查是否有现成的patient info summary
-                        for summary_field in ["patient_info_summary", "patientInfoSummary", "patient_info", "patientInfo", "summary", "background"]:
-                            if summary_field in doc and doc[summary_field]:
-                                patient_info["summary"] = str(doc[summary_field])
-                                print(f"[INFO] Found patient info summary from {collection_name} collection (field: {summary_field})")
-                                return patient_info
-                        
-                        # Extract basic patient background information
-                        # 尝试更多的字段名称变体
-                        # 提取基本的患者背景信息
-                        # Age - 尝试多种字段名
-                        age = (doc.get("age") or doc.get("Age") or doc.get("birthYear") or 
-                              (doc.get("birthDate") and (datetime.now().year - pd.to_datetime(doc["birthDate"]).year) if pd.notna(doc.get("birthDate")) else None))
-                        if age:
-                            try:
-                                patient_info["age"] = int(age) if isinstance(age, (int, float)) else age
-                            except:
-                                pass
-                        
-                        # Gender
-                        gender = (doc.get("gender") or doc.get("Gender") or doc.get("sex") or 
-                                 doc.get("Sex") or doc.get("性别"))
-                        if gender:
-                            patient_info["gender"] = str(gender)
-                        
-                        # Weight
-                        weight = (doc.get("weight") or doc.get("Weight") or doc.get("weight_kg") or 
-                                 doc.get("weightKg") or doc.get("体重"))
-                        if weight:
-                            patient_info["weight"] = weight
-                        
-                        # Height
-                        height = (doc.get("height") or doc.get("Height") or doc.get("height_cm") or 
-                                 doc.get("heightCm") or doc.get("身高"))
-                        if height:
-                            patient_info["height"] = height
-                        
-                        # BMI
-                        bmi = doc.get("bmi") or doc.get("BMI") or doc.get("bodyMassIndex")
-                        if bmi:
-                            patient_info["bmi"] = bmi
-                        
-                        # Medical history
-                        medical_history = (doc.get("medical_history") or doc.get("medicalHistory") or 
-                                         doc.get("disease_history") or doc.get("diseaseHistory") or
-                                         doc.get("conditions") or doc.get("Conditions") or
-                                         doc.get("diagnosis") or doc.get("Diagnosis"))
-                        if medical_history:
-                            patient_info["medical_history"] = str(medical_history)
-                        
-                        # Ethnicity
-                        ethnicity = (doc.get("ethnicity") or doc.get("Ethnicity") or 
-                                    doc.get("民族") or doc.get("race") or doc.get("Race"))
-                        if ethnicity:
-                            patient_info["ethnicity"] = str(ethnicity)
-                        
-                        # Region/Location
-                        region = (doc.get("region") or doc.get("Region") or 
-                                 doc.get("地域") or doc.get("location") or doc.get("Location") or
-                                 doc.get("address") or doc.get("Address") or
-                                 doc.get("city") or doc.get("City") or doc.get("state") or doc.get("State"))
-                        if region:
-                            patient_info["region"] = str(region)
-                        
-                        # Exercise intensity
-                        exercise = (doc.get("exercise_intensity") or doc.get("exerciseIntensity") or 
-                                   doc.get("运动强度") or doc.get("exerciseLevel") or doc.get("exercise_level"))
-                        if exercise:
-                            patient_info["exercise_intensity"] = str(exercise)
-                        
-                        # Medications
-                        medications = (doc.get("medications") or doc.get("Medications") or 
-                                      doc.get("current_medications") or doc.get("currentMedications") or
-                                      doc.get("用药") or doc.get("meds") or doc.get("Meds"))
-                        if medications:
-                            patient_info["medications"] = str(medications)
-                        
-                        # Name fields (for display)
-                        name = (doc.get("name") or doc.get("Name") or 
-                               doc.get("firstName") or doc.get("first_name") or
-                               (doc.get("firstName") and doc.get("lastName") and 
-                                f"{doc.get('firstName')} {doc.get('lastName')}"))
-                        if name:
-                            patient_info["name"] = str(name)
-                        
-                        # Calculate BMI if weight and height are available but BMI is not
-                        if patient_info.get("weight") and patient_info.get("height") and not patient_info.get("bmi"):
-                            try:
-                                weight_kg = float(patient_info["weight"])
-                                height_val = float(patient_info["height"])
-                                # Assume height is in cm if > 3, otherwise in meters
-                                height_m = height_val / 100.0 if height_val > 3 else height_val
-                                if height_m > 0:
-                                    patient_info["bmi"] = round(weight_kg / (height_m ** 2), 1)
-                            except Exception:
-                                pass
-                        
-                        # If we found any info, return (don't keep searching)
-                        if len(patient_info) > 1:  # More than just patient_id
-                            print(f"[INFO] Extracted patient info from {collection_name} collection")
-                            return patient_info
-                except Exception as e:
-                    print(f"[DEBUG] Error querying {collection_name} with field {id_field}: {e}")
-                    continue
-        except Exception as e:
-            print(f"[DEBUG] Error accessing collection {collection_name}: {e}")
-            continue
+                
+                # Race - from profile.race, map to race_display
+                race = profile.get("race")
+                if race:
+                    race_display = race_mapping().get(race, race)
+                    if race_display:
+                        patient_info["ethnicity"] = race_display
+                    patient_info["race"] = race
+                
+                # Nickname - from profile.nickName
+                nickname = profile.get("nickName")
+                if nickname:
+                    patient_info["nickname"] = str(nickname)
+            
+            # Health Conditions - from top-level healthConditions (list of objects)
+            health_conditions = doc.get("healthConditions")
+            if health_conditions and isinstance(health_conditions, list):
+                conditions_list = []
+                for item in health_conditions:
+                    if isinstance(item, dict):
+                        condition = item.get("condition")
+                        if condition:
+                            conditions_list.append(str(condition))
+                    elif isinstance(item, str):
+                        conditions_list.append(item)
+                if conditions_list:
+                    patient_info["medical_history"] = ", ".join(conditions_list)
+            
+            # Diagnoses - from top-level diagnoses (list), map to diagnoses_display
+            diagnoses = doc.get("diagnoses")
+            if diagnoses and isinstance(diagnoses, list):
+                mapped_diagnoses = []
+                diag_mapping = diagnoses_mapping()
+                for diagnosis in diagnoses:
+                    if diagnosis and diagnosis in diag_mapping:
+                        mapped_diagnoses.append(diag_mapping[diagnosis])
+                if mapped_diagnoses:
+                    patient_info["diagnoses"] = ", ".join(mapped_diagnoses)
+            
+            # Control Level - from top-level controlLevel
+            control_level = doc.get("controlLevel")
+            if control_level:
+                patient_info["control_level"] = str(control_level)
+            
+            # Print debug info
+            print(f"[DEBUG] Extracted patient info fields: {list(patient_info.keys())}")
+            for key, value in patient_info.items():
+                if key != "patient_id":  # Skip patient_id in debug output
+                    print(f"[DEBUG]   {key}: {value} (type: {type(value).__name__})")
+            
+            return patient_info
+        else:
+            print(f"[INFO] Could not find patient in uc_patients collection for {patient_id}")
+    except Exception as e:
+        print(f"[ERROR] Error querying uc_patients collection: {e}")
     
     print(f"[INFO] Could not find detailed patient info for {patient_id}, using basic info (patient_id only)")
     return patient_info  # Return at least patient_id
@@ -941,6 +1027,10 @@ def generate_html_summary(
     }
     t = labels.get(language, labels['zh'])
     
+    # Debug: Print what patient_info contains
+    print(f"[DEBUG] generate_html_summary: patient_info keys = {list(patient_info.keys())}")
+    print(f"[DEBUG] generate_html_summary: patient_info = {patient_info}")
+    
     # Patient info section
     # Always show at least patient ID
     patient_info_html = f"""
@@ -959,52 +1049,79 @@ def generate_html_summary(
         name_label = "姓名" if language == 'zh' else "Name"
         patient_info_html += f'<li><strong>{name_label}:</strong> {html.escape(str(patient_info["name"]))}</li>'
     
-    # If patient info summary exists, display it first
-    # 如果有现成的patient info summary，优先显示
-    if patient_info.get("summary"):
-        summary_text = str(patient_info["summary"])
-        summary_label = t.get("summary", "患者背景" if language == 'zh' else "Patient Background")
-        patient_info_html += f'<li><strong>{summary_label}:</strong> {html.escape(summary_text)}</li>'
-    else:
-        # Show individual fields if no summary
-        if patient_info.get("age"):
-            gender = patient_info.get("gender") or ""
-            if gender:
-                gender_text = t['male'] if gender.lower() in ["male", "m", "男"] else t['female'] if gender.lower() in ["female", "f", "女"] else ""
-                gender_text = f", {gender_text}" if gender_text else ""
-            else:
-                gender_text = ""
-            age_suffix = t['years_old'] if language == 'zh' else ' years old'
-            age_label = "年龄" if language == 'zh' else "Age"
-            patient_info_html += f'<li>{age_label}: {patient_info["age"]}{age_suffix}{gender_text}</li>'
+    # Show individual fields (always show all extracted fields)
+    # 显示各个字段（总是显示所有提取到的字段）
+    # Use more lenient checks to ensure data is displayed
+    # 使用更宽松的检查条件确保数据显示
+    
+    # Age
+    age_val = patient_info.get("age")
+    if age_val is not None and age_val != "":
+        gender_display = patient_info.get("gender_display") or patient_info.get("gender") or ""
+        gender_identity = patient_info.get("gender_identity") or ""
+        gender_text = ""
+        if gender_display:
+            gender_text = f", {gender_display}"
+        elif gender_display := patient_info.get("gender"):
+            gender_lower = str(gender_display).lower().strip()
+            if gender_lower in ["male", "m", "男"]:
+                gender_text = f", {t['male']}"
+            elif gender_lower in ["female", "f", "女"]:
+                gender_text = f", {t['female']}"
         
-        if patient_info.get("weight") and patient_info.get("height"):
-            patient_info_html += f'<li>{t["weight"]}: {patient_info["weight"]}kg, {t["height"]}: {patient_info["height"]}cm</li>'
-        elif patient_info.get("weight"):
-            patient_info_html += f'<li>{t["weight"]}: {patient_info["weight"]}kg</li>'
-        elif patient_info.get("height"):
-            patient_info_html += f'<li>{t["height"]}: {patient_info["height"]}cm</li>'
+        gender_identity_text = ""
+        if gender_identity:
+            gender_identity_text = f" ({gender_identity})"
         
-        if patient_info.get("bmi"):
-            patient_info_html += f'<li>BMI: {patient_info["bmi"]}</li>'
-        
-        if patient_info.get("medical_history"):
-            medical_history = str(patient_info["medical_history"])
-            patient_info_html += f'<li>{t["medical_history"]}: {html.escape(medical_history)}</li>'
-        
-        if patient_info.get("ethnicity"):
-            patient_info_html += f'<li>{t["ethnicity"]}: {html.escape(str(patient_info["ethnicity"]))}</li>'
-        
-        if patient_info.get("region"):
-            patient_info_html += f'<li>{t["region"]}: {html.escape(str(patient_info["region"]))}</li>'
-        
-        if patient_info.get("exercise_intensity"):
-            exercise = str(patient_info["exercise_intensity"])
-            patient_info_html += f'<li>{t["exercise_intensity"]}: {html.escape(exercise)}</li>'
-        
-        if patient_info.get("medications"):
-            medications = str(patient_info["medications"])
-            patient_info_html += f'<li>{t["medications"]}: {html.escape(medications)}</li>'
+        age_suffix = t['years_old'] if language == 'zh' else ' years old'
+        age_label = "年龄" if language == 'zh' else "Age"
+        patient_info_html += f'<li>{age_label}: {age_val}{age_suffix}{gender_text}{gender_identity_text}</li>'
+    
+    # Weight and Height
+    weight_val = patient_info.get("weight")
+    height_val = patient_info.get("height")
+    if weight_val is not None and weight_val != "" and height_val is not None and height_val != "":
+        patient_info_html += f'<li>{t["weight"]}: {weight_val}kg, {t["height"]}: {height_val}cm</li>'
+    elif weight_val is not None and weight_val != "":
+        patient_info_html += f'<li>{t["weight"]}: {weight_val}kg</li>'
+    elif height_val is not None and height_val != "":
+        patient_info_html += f'<li>{t["height"]}: {height_val}cm</li>'
+    
+    # BMI
+    bmi_val = patient_info.get("bmi")
+    if bmi_val is not None and bmi_val != "":
+        patient_info_html += f'<li>BMI: {bmi_val}</li>'
+    
+    # Medical history (from healthConditions)
+    medical_history = patient_info.get("medical_history")
+    if medical_history and str(medical_history).strip():
+        patient_info_html += f'<li>{t["medical_history"]}: {html.escape(str(medical_history))}</li>'
+    
+    # Diagnoses (from diagnoses_display)
+    diagnoses = patient_info.get("diagnoses")
+    if diagnoses and str(diagnoses).strip():
+        diagnoses_label = "诊断" if language == 'zh' else "Diagnoses"
+        patient_info_html += f'<li>{diagnoses_label}: {html.escape(str(diagnoses))}</li>'
+    
+    # Ethnicity
+    ethnicity = patient_info.get("ethnicity")
+    if ethnicity and str(ethnicity).strip():
+        patient_info_html += f'<li>{t["ethnicity"]}: {html.escape(str(ethnicity))}</li>'
+    
+    # Region
+    region = patient_info.get("region")
+    if region and str(region).strip():
+        patient_info_html += f'<li>{t["region"]}: {html.escape(str(region))}</li>'
+    
+    # Exercise intensity
+    exercise = patient_info.get("exercise_intensity")
+    if exercise and str(exercise).strip():
+        patient_info_html += f'<li>{t["exercise_intensity"]}: {html.escape(str(exercise))}</li>'
+    
+    # Medications
+    medications = patient_info.get("medications")
+    if medications and str(medications).strip():
+        patient_info_html += f'<li>{t["medications"]}: {html.escape(str(medications))}</li>'
     
     # If no additional info found, show a message
     if len(patient_info) == 1:  # Only patient_id
@@ -1018,9 +1135,9 @@ def generate_html_summary(
     
     # Title based on language
     if language == 'zh':
-        title = "AI食物日志总结 - 赋能患者, 提升照护师效率"
+        title = "AI食物日志总结 —— 赋能患者, 提升照护师效率"
     else:
-        title = "AI Food Log Summary - Empowering Patients, Enhancing Care Team Efficiency"
+        title = "AI Food Log Summary"
     
     # Food log summary section
     if language == 'zh':
