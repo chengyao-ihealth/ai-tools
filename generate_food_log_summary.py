@@ -968,7 +968,7 @@ def generate_html_summary(
             'total_calories': '总热量',
             'kcal': 'kcal',
             'main_ingredients': '主要食材',
-            'notes': '备注',
+            'notes': '病人备注',
             'no_food_logs': '该日期没有食物日志记录',
             'logged_at': '记录时间',
             'lab_results': '实验室检查结果',
@@ -1004,7 +1004,7 @@ def generate_html_summary(
             'total_calories': 'Total Calories',
             'kcal': 'kcal',
             'main_ingredients': 'Main Ingredients',
-            'notes': 'Notes',
+            'notes': 'Patient Notes',
             'no_food_logs': 'No food log records for this date',
             'logged_at': 'Logged at',
             'lab_results': 'Lab Results',
@@ -1323,7 +1323,7 @@ def generate_html_summary(
         
         # Display notes (patient's description)
         if all_notes:
-            notes_label = "备注" if language == 'zh' else "Notes"
+            notes_label = "病人备注" if language == 'zh' else "Patient Notes"
             food_log_html += '<div class="meal-notes">'
             food_log_html += f'<div class="notes-label"><strong>{notes_label}:</strong></div>'
             for note in all_notes:
@@ -1355,16 +1355,26 @@ def generate_html_summary(
                 elif isinstance(commented_by, str) and commented_by:
                     comment_html += f'<div class="comment-by">— {html.escape(commented_by)}</div>'
                 
-                # Show comment time if available
+                # Show comment time if available (convert to PT timezone)
                 commented_at = comment.get("commentedAt")
                 if commented_at:
                     try:
-                        # Try to parse and format the date
+                        # Try to parse and format the date, convert to PT timezone
                         dt = pd.to_datetime(commented_at)
-                        if language == 'zh':
-                            time_str = dt.strftime('%Y-%m-%d %H:%M')
+                        # Convert to PT timezone
+                        pt_timezone = pytz.timezone('America/Los_Angeles')
+                        if dt.tzinfo is not None:
+                            # Has timezone info, convert to PT
+                            dt_pt = dt.astimezone(pt_timezone)
                         else:
-                            time_str = dt.strftime('%Y-%m-%d %I:%M %p')
+                            # No timezone info, assume UTC and convert to PT
+                            dt_utc = pytz.utc.localize(dt.to_pydatetime())
+                            dt_pt = dt_utc.astimezone(pt_timezone)
+                        
+                        if language == 'zh':
+                            time_str = dt_pt.strftime('%Y-%m-%d %H:%M PT')
+                        else:
+                            time_str = dt_pt.strftime('%Y-%m-%d %I:%M %p PT')
                         comment_html += f'<div class="comment-time">{time_str}</div>'
                     except:
                         comment_html += f'<div class="comment-time">{html.escape(str(commented_at))}</div>'
@@ -1681,11 +1691,18 @@ def main():
     
     args = parser.parse_args()
     
-    # Parse date
+    # Parse date (assuming input date is in PT timezone)
+    # Convert to UTC for MongoDB query since MongoDB stores dates in UTC
     try:
         target_date = datetime.strptime(args.date, "%Y-%m-%d")
-        start_date = target_date.replace(hour=0, minute=0, second=0)
-        end_date = target_date.replace(hour=23, minute=59, second=59)
+        # Assume the input date is in PT timezone
+        pt_timezone = pytz.timezone('America/Los_Angeles')
+        # Create start and end of day in PT timezone
+        start_date_pt = pt_timezone.localize(target_date.replace(hour=0, minute=0, second=0, microsecond=0))
+        end_date_pt = pt_timezone.localize(target_date.replace(hour=23, minute=59, second=59, microsecond=999999))
+        # Convert to UTC for MongoDB query
+        start_date = start_date_pt.astimezone(pytz.utc).replace(tzinfo=None)
+        end_date = end_date_pt.astimezone(pytz.utc).replace(tzinfo=None)
     except ValueError:
         print(f"[ERROR] Invalid date format. Please use YYYY-MM-DD format.", file=sys.stderr)
         sys.exit(1)

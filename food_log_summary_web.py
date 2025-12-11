@@ -110,51 +110,79 @@ def get_all_patient_ids_with_food_logs(
             if isinstance(member_id, ObjectId):
                 member_id = str(member_id)
             
-            latest_date = doc.get("latest_date")
-            earliest_date = doc.get("earliest_date")
+            latest_date_raw = doc.get("latest_date")
+            earliest_date_raw = doc.get("earliest_date")
             
-            # Convert datetime to ISO format string if present
-            if latest_date and isinstance(latest_date, datetime):
-                latest_date = latest_date.isoformat()
-            elif latest_date:
-                latest_date = str(latest_date)
+            # Convert to PT timezone
+            try:
+                import pytz
+                pt_timezone = pytz.timezone('America/Los_Angeles')
+            except ImportError:
+                print("[WARNING] pytz not installed, using UTC for date conversion", file=sys.stderr)
+                pt_timezone = None
             
-            if earliest_date and isinstance(earliest_date, datetime):
-                earliest_date = earliest_date.isoformat()
-            elif earliest_date:
-                earliest_date = str(earliest_date)
+            def convert_to_pt_datetime(dt):
+                """Convert datetime to PT timezone and return datetime object (for sorting)"""
+                if not dt:
+                    return None
+                
+                if not pt_timezone:
+                    return None
+                
+                if isinstance(dt, datetime):
+                    # If timezone-aware, convert to PT; otherwise assume UTC
+                    if dt.tzinfo is not None:
+                        return dt.astimezone(pt_timezone)
+                    else:
+                        # Assume UTC if no timezone info
+                        dt_utc = pytz.utc.localize(dt)
+                        return dt_utc.astimezone(pt_timezone)
+                elif isinstance(dt, str):
+                    # Try to parse string and convert to PT
+                    try:
+                        if dt.endswith('Z'):
+                            dt_utc = datetime.fromisoformat(dt.replace('Z', '+00:00'))
+                        else:
+                            dt_parsed = datetime.fromisoformat(dt)
+                            if dt_parsed.tzinfo is not None:
+                                dt_utc = dt_parsed
+                            else:
+                                dt_utc = pytz.utc.localize(dt_parsed)
+                        return dt_utc.astimezone(pt_timezone)
+                    except:
+                        return None
+                else:
+                    return None
             
-            # Calculate top 5 days with most logs
+            def convert_to_pt_date(dt):
+                """Convert datetime to PT timezone and return date string in YYYY-MM-DD format"""
+                dt_pt = convert_to_pt_datetime(dt)
+                if dt_pt:
+                    return dt_pt.date().isoformat()
+                return None
+            
+            # Convert dates to PT timezone for display and sorting
+            latest_date = None
+            latest_date_pt_datetime = None  # Keep PT datetime for sorting
+            if latest_date_raw:
+                latest_date_pt_datetime = convert_to_pt_datetime(latest_date_raw)
+                latest_date = latest_date_pt_datetime.date().isoformat() if latest_date_pt_datetime else None
+            
+            earliest_date = None
+            if earliest_date_raw:
+                earliest_date = convert_to_pt_date(earliest_date_raw)
+            
+            # Calculate top 5 days with most logs (using PT timezone)
             top_days = []
             logs = doc.get("logs", [])
             if logs:
-                # Count logs per day
+                # Count logs per day in PT timezone
                 from collections import defaultdict
                 daily_counts = defaultdict(int)
                 for log_date in logs:
-                    if isinstance(log_date, datetime):
-                        # Use the date as-is, keeping original timezone
-                        # If timezone-aware, convert to local date in that timezone
-                        if log_date.tzinfo is not None:
-                            # Get date in the original timezone
-                            day_str = log_date.date().isoformat()
-                        else:
-                            day_str = log_date.date().isoformat()
-                    else:
-                        # Try to parse if it's a string, keep original timezone
-                        try:
-                            if isinstance(log_date, str):
-                                # Try parsing with timezone info preserved
-                                if log_date.endswith('Z'):
-                                    # UTC timezone
-                                    log_date = datetime.fromisoformat(log_date.replace('Z', '+00:00'))
-                                else:
-                                    # Try to parse preserving timezone
-                                    log_date = datetime.fromisoformat(log_date)
-                            day_str = log_date.date().isoformat()
-                        except:
-                            continue
-                    daily_counts[day_str] += 1
+                    day_str = convert_to_pt_date(log_date)
+                    if day_str:
+                        daily_counts[day_str] += 1
                 
                 # Sort by count (descending) and take top 5
                 sorted_days = sorted(daily_counts.items(), key=lambda x: x[1], reverse=True)[:5]
@@ -163,13 +191,24 @@ def get_all_patient_ids_with_food_logs(
             patient_list.append({
                 "patient_id": str(member_id),
                 "food_log_count": doc.get("count", 0),
-                "latest_date": latest_date,
+                "latest_date": latest_date,  # PT date string for display
+                "latest_date_pt_datetime": latest_date_pt_datetime,  # PT datetime for sorting
                 "earliest_date": earliest_date,
                 "top_days": top_days  # Top 5 days with most logs
             })
         
-        # Sort by latest_date (most recent first)
-        patient_list.sort(key=lambda x: x.get("latest_date", ""), reverse=True)
+        # Sort by latest_date_pt_datetime (most recent first, using PT timezone)
+        # Patients with no date come last
+        def get_sort_key(x):
+            dt_pt = x.get("latest_date_pt_datetime")
+            if dt_pt:
+                return dt_pt
+            # Return a very old datetime for patients with no date
+            if pt_timezone:
+                return pytz.utc.localize(datetime.min).astimezone(pt_timezone)
+            return datetime.min
+        
+        patient_list.sort(key=get_sort_key, reverse=True)
         
         return patient_list
     except Exception as e:
@@ -478,10 +517,21 @@ HTML_TEMPLATE = """
                             const t = translations[currentLang];
                             document.getElementById('foodLogCount').textContent = option.dataset.count;
                             const locale = currentLang === 'zh' ? 'zh-CN' : 'en-US';
-                            document.getElementById('earliestDate').textContent = 
-                                option.dataset.earliest ? new Date(option.dataset.earliest).toLocaleDateString(locale) : '-';
-                            document.getElementById('latestDate').textContent = 
-                                option.dataset.latest ? new Date(option.dataset.latest).toLocaleDateString(locale) : '-';
+                            
+                            // Format dates in PT timezone (dates are already in PT from backend)
+                            const formatPTDate = (dateStr) => {
+                                if (!dateStr) return '-';
+                                try {
+                                    const [year, month, day] = dateStr.split('-');
+                                    const dateObj = new Date(year, parseInt(month) - 1, day);
+                                    return dateObj.toLocaleDateString(locale, { timeZone: 'America/Los_Angeles' });
+                                } catch (e) {
+                                    return dateStr;
+                                }
+                            };
+                            
+                            document.getElementById('earliestDate').textContent = formatPTDate(option.dataset.earliest);
+                            document.getElementById('latestDate').textContent = formatPTDate(option.dataset.latest);
                             
                             // Update top 5 days
                             const topDaysList = document.getElementById('topDaysList');
@@ -490,8 +540,15 @@ HTML_TEMPLATE = """
                                 if (topDays && topDays.length > 0) {
                                     let html = '';
                                     topDays.forEach(day => {
-                                        const dateObj = new Date(day.date);
-                                        const dateStr = dateObj.toLocaleDateString(locale);
+                                        // Date is already in PT timezone from backend (YYYY-MM-DD format)
+                                        let dateStr = day.date;
+                                        try {
+                                            const [year, month, dayNum] = day.date.split('-');
+                                            const dateObj = new Date(year, parseInt(month) - 1, dayNum);
+                                            dateStr = dateObj.toLocaleDateString(locale, { timeZone: 'America/Los_Angeles' });
+                                        } catch (e) {
+                                            // Keep original date string if parsing fails
+                                        }
                                         html += `<div style="margin: 3px 0;">${dateStr} - ${day.count} ${t.records}</div>`;
                                     });
                                     topDaysList.innerHTML = html;
@@ -523,8 +580,18 @@ HTML_TEMPLATE = """
         }
         updateLanguage(currentLang);
         
-        // Set today as default date
-        document.getElementById('dateSelect').valueAsDate = new Date();
+        // Set today as default date in PT timezone
+        function getTodayPT() {
+            const now = new Date();
+            // Convert to PT timezone
+            const ptDate = new Date(now.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+            // Format as YYYY-MM-DD for date input
+            const year = ptDate.getFullYear();
+            const month = String(ptDate.getMonth() + 1).padStart(2, '0');
+            const day = String(ptDate.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        }
+        document.getElementById('dateSelect').value = getTodayPT();
         
         // Load patient IDs
         function loadPatientIDs() {
@@ -560,8 +627,20 @@ HTML_TEMPLATE = """
                             
                             // Get values first
                             const count = option.dataset.count || '-';
-                            const earliestDateStr = option.dataset.earliest ? new Date(option.dataset.earliest).toLocaleDateString(locale) : '-';
-                            const latestDateStr = option.dataset.latest ? new Date(option.dataset.latest).toLocaleDateString(locale) : '-';
+                            // Dates are already in PT timezone from backend (YYYY-MM-DD format), format for display
+                            const formatPTDate = (dateStr) => {
+                                if (!dateStr) return '-';
+                                try {
+                                    // Parse as PT date (YYYY-MM-DD format from backend)
+                                    const [year, month, day] = dateStr.split('-');
+                                    const dateObj = new Date(year, parseInt(month) - 1, day);
+                                    return dateObj.toLocaleDateString(locale, { timeZone: 'America/Los_Angeles' });
+                                } catch (e) {
+                                    return dateStr;
+                                }
+                            };
+                            const earliestDateStr = formatPTDate(option.dataset.earliest);
+                            const latestDateStr = formatPTDate(option.dataset.latest);
                             
                             // Update values in spans
                             document.getElementById('foodLogCount').textContent = count;
@@ -751,11 +830,24 @@ def api_generate_summary():
         if not patient_id or not date_str:
             return jsonify({"error": "Missing patient_id or date"}), 400
         
-        # Parse date
+        # Parse date (assuming input date is in PT timezone)
+        # Convert to UTC for MongoDB query since MongoDB stores dates in UTC
         try:
             target_date = datetime.strptime(date_str, "%Y-%m-%d")
-            start_date = target_date.replace(hour=0, minute=0, second=0)
-            end_date = target_date.replace(hour=23, minute=59, second=59)
+            # Assume the input date is in PT timezone
+            try:
+                import pytz
+                pt_timezone = pytz.timezone('America/Los_Angeles')
+                # Create start and end of day in PT timezone
+                start_date_pt = pt_timezone.localize(target_date.replace(hour=0, minute=0, second=0, microsecond=0))
+                end_date_pt = pt_timezone.localize(target_date.replace(hour=23, minute=59, second=59, microsecond=999999))
+                # Convert to UTC for MongoDB query
+                start_date = start_date_pt.astimezone(pytz.utc).replace(tzinfo=None)
+                end_date = end_date_pt.astimezone(pytz.utc).replace(tzinfo=None)
+            except ImportError:
+                # Fallback if pytz not available
+                start_date = target_date.replace(hour=0, minute=0, second=0)
+                end_date = target_date.replace(hour=23, minute=59, second=59)
         except ValueError:
             return jsonify({"error": "Invalid date format. Use YYYY-MM-DD"}), 400
         
