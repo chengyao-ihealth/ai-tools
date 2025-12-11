@@ -132,10 +132,189 @@ def extract_links(payload: dict, debug: bool = False):
     return links
 
 
+def get_lab_results(client: MongoClient, patient_id: str, database_name: str = "UnifiedCare") -> Dict[str, Any]:
+    """
+    Get lab results for a patient from MongoDB.
+    从MongoDB获取患者的实验室检查结果。
+    
+    Args:
+        client: MongoDB client
+        patient_id: Patient ID (memberId in lab_results collection)
+        database_name: Database name
+        
+    Returns:
+        Dict with lab results
+    """
+    db = client[database_name]
+    lab_results = {
+        "glucose_fasting": None,
+        "hba1c": None,
+        "cholesterol_total": None,
+        "ldl": None,
+        "hdl": None,
+        "triglycerides": None,
+        "weight_lbs": None,
+        "bmi": None,
+        "blood_pressure": None,
+        "last_updated": None,
+    }
+    
+    try:
+        # Try different collection names
+        for collection_name in ["lab_results", "labResults", "lab_results_v2"]:
+            try:
+                collection = db[collection_name]
+                
+                # Try different ID fields
+                for id_field in ["memberId", "member_id", "patientId", "patient_id", "_id"]:
+                    try:
+                        query_id = patient_id
+                        if id_field == "_id" or id_field == "memberId":
+                            try:
+                                query_id = ObjectId(patient_id)
+                            except Exception:
+                                pass
+                        
+                        query = {id_field: query_id}
+                        # Get most recent lab results (sorted by test_date descending)
+                        docs = list(collection.find(query).sort("test_date", -1).limit(100))
+                        
+                        if docs:
+                            for doc in docs:
+                                test_date = doc.get("test_date")
+                                if not test_date:
+                                    continue
+                                
+                                test_type = (doc.get("test_type") or doc.get("testType") or "").lower()
+                                test_value = doc.get("test_value") or doc.get("testValue")
+                                
+                                if not test_value:
+                                    continue
+                                
+                                # Map lab types to our dict keys
+                                if "glucose" in test_type and "fasting" in test_type:
+                                    if lab_results["glucose_fasting"] is None:
+                                        lab_results["glucose_fasting"] = test_value
+                                elif "hba1c" in test_type or "a1c" in test_type:
+                                    if lab_results["hba1c"] is None:
+                                        lab_results["hba1c"] = test_value
+                                elif "cholesterol" in test_type and "total" in test_type:
+                                    if lab_results["cholesterol_total"] is None:
+                                        lab_results["cholesterol_total"] = test_value
+                                elif "ldl" in test_type:
+                                    if lab_results["ldl"] is None:
+                                        lab_results["ldl"] = test_value
+                                elif "hdl" in test_type:
+                                    if lab_results["hdl"] is None:
+                                        lab_results["hdl"] = test_value
+                                elif "triglyceride" in test_type:
+                                    if lab_results["triglycerides"] is None:
+                                        lab_results["triglycerides"] = test_value
+                                
+                                # Track the most recent update
+                                if lab_results["last_updated"] is None:
+                                    if isinstance(test_date, datetime):
+                                        lab_results["last_updated"] = test_date.strftime("%Y-%m-%d")
+                                    elif isinstance(test_date, str):
+                                        lab_results["last_updated"] = test_date[:10]  # Take first 10 chars (YYYY-MM-DD)
+                            
+                            if any(v is not None for v in lab_results.values() if v != "last_updated"):
+                                print(f"[INFO] Found lab results from {collection_name} collection")
+                                return lab_results
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+    except Exception as e:
+        print(f"[WARN] Error retrieving lab results: {e}")
+    
+    return lab_results
+
+
+def get_glucose_data(client: MongoClient, patient_id: str, database_name: str = "UnifiedCare", days: int = 30) -> Dict[str, Any]:
+    """
+    Get glucose/blood glucose measurement data for a patient from MongoDB.
+    从MongoDB获取患者的血糖测量数据。
+    
+    Args:
+        client: MongoDB client
+        patient_id: Patient ID (memberId in measurements collection)
+        database_name: Database name
+        days: Number of days to look back (default 30)
+        
+    Returns:
+        Dict with glucose data summary
+    """
+    db = client[database_name]
+    
+    try:
+        # Try different collection names
+        for collection_name in ["measurements", "Measurement"]:
+            try:
+                collection = db[collection_name]
+                
+                # Calculate date threshold
+                from_date = datetime.now() - timedelta(days=days)
+                
+                # Try different ID fields
+                for id_field in ["memberId", "member_id", "patientId", "patient_id"]:
+                    try:
+                        query_id = patient_id
+                        if id_field == "memberId":
+                            try:
+                                query_id = ObjectId(patient_id)
+                            except Exception:
+                                pass
+                        
+                        # Query for blood glucose measurements
+                        query = {
+                            id_field: query_id,
+                            "type": {"$in": ["BG", "blood_glucose", "Blood Glucose", "glucose"]},
+                        }
+                        
+                        # Add date filter if available
+                        docs = list(collection.find(query).sort("date", -1).limit(100))
+                        
+                        if docs:
+                            values = []
+                            for doc in docs:
+                                # Extract value
+                                value = doc.get("value") or doc.get("Value")
+                                if value:
+                                    try:
+                                        values.append(float(value))
+                                    except (ValueError, TypeError):
+                                        continue
+                            
+                            if values:
+                                avg_glucose = sum(values) / len(values)
+                                min_glucose = min(values)
+                                max_glucose = max(values)
+                                
+                                print(f"[INFO] Found {len(values)} glucose measurements from {collection_name} collection")
+                                
+                                return {
+                                    "has_data": True,
+                                    "count": len(values),
+                                    "average": round(avg_glucose, 1),
+                                    "min": round(min_glucose, 1),
+                                    "max": round(max_glucose, 1),
+                                }
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+    except Exception as e:
+        print(f"[WARN] Error retrieving glucose data: {e}")
+    
+    return {"has_data": False, "count": 0}
+
+
 def get_patient_info(client: MongoClient, patient_id: str, database_name: str = "UnifiedCare") -> Dict[str, Any]:
     """
-    Get patient information from database.
-    从数据库获取患者信息。
+    Get simple patient background information from database.
+    If a patient info summary exists, use it directly.
+    从数据库获取简单的患者背景信息。如果有现成的patient info summary就直接用。
     
     Args:
         client: MongoDB client
@@ -143,10 +322,10 @@ def get_patient_info(client: MongoClient, patient_id: str, database_name: str = 
         database_name: Database name
         
     Returns:
-        Dict with patient information
+        Dict with patient information (always includes patient_id)
     """
     db = client[database_name]
-    patient_info = {}
+    patient_info = {"patient_id": patient_id}  # Always include patient_id
     
     # Try to get from patients or members collection
     # 尝试从patients或members集合获取
@@ -155,11 +334,11 @@ def get_patient_info(client: MongoClient, patient_id: str, database_name: str = 
             collection = db[collection_name]
             
             # Try different ID fields
-            for id_field in ["_id", "patient_id", "memberId", "member_id"]:
+            for id_field in ["_id", "patient_id", "memberId", "member_id", "id"]:
                 try:
                     # Convert patient_id to ObjectId if possible
                     query_id = patient_id
-                    if id_field == "_id" or id_field == "memberId":
+                    if id_field == "_id" or id_field == "memberId" or id_field == "id":
                         try:
                             query_id = ObjectId(patient_id)
                         except Exception:
@@ -169,40 +348,119 @@ def get_patient_info(client: MongoClient, patient_id: str, database_name: str = 
                     doc = collection.find_one(query)
                     
                     if doc:
-                        # Extract patient information
-                        patient_info.update({
-                            "age": doc.get("age") or doc.get("Age") or None,
-                            "gender": doc.get("gender") or doc.get("Gender") or doc.get("sex") or None,
-                            "weight": doc.get("weight") or doc.get("Weight") or None,
-                            "height": doc.get("height") or doc.get("Height") or None,
-                            "bmi": doc.get("bmi") or doc.get("BMI") or None,
-                            "medical_history": doc.get("medical_history") or doc.get("medicalHistory") or doc.get("disease_history") or None,
-                            "ethnicity": doc.get("ethnicity") or doc.get("Ethnicity") or doc.get("民族") or None,
-                            "region": doc.get("region") or doc.get("Region") or doc.get("地域") or doc.get("location") or None,
-                            "exercise_intensity": doc.get("exercise_intensity") or doc.get("exerciseIntensity") or doc.get("运动强度") or None,
-                            "medications": doc.get("medications") or doc.get("Medications") or doc.get("current_medications") or doc.get("用药") or None,
-                        })
+                        print(f"[INFO] Found document in {collection_name} collection with field {id_field}")
                         
-                        # Calculate BMI if weight and height are available
+                        # Check for existing patient info summary first
+                        # 先检查是否有现成的patient info summary
+                        for summary_field in ["patient_info_summary", "patientInfoSummary", "patient_info", "patientInfo", "summary", "background"]:
+                            if summary_field in doc and doc[summary_field]:
+                                patient_info["summary"] = str(doc[summary_field])
+                                print(f"[INFO] Found patient info summary from {collection_name} collection (field: {summary_field})")
+                                return patient_info
+                        
+                        # Extract basic patient background information
+                        # 尝试更多的字段名称变体
+                        # 提取基本的患者背景信息
+                        # Age - 尝试多种字段名
+                        age = (doc.get("age") or doc.get("Age") or doc.get("birthYear") or 
+                              (doc.get("birthDate") and (datetime.now().year - pd.to_datetime(doc["birthDate"]).year) if pd.notna(doc.get("birthDate")) else None))
+                        if age:
+                            try:
+                                patient_info["age"] = int(age) if isinstance(age, (int, float)) else age
+                            except:
+                                pass
+                        
+                        # Gender
+                        gender = (doc.get("gender") or doc.get("Gender") or doc.get("sex") or 
+                                 doc.get("Sex") or doc.get("性别"))
+                        if gender:
+                            patient_info["gender"] = str(gender)
+                        
+                        # Weight
+                        weight = (doc.get("weight") or doc.get("Weight") or doc.get("weight_kg") or 
+                                 doc.get("weightKg") or doc.get("体重"))
+                        if weight:
+                            patient_info["weight"] = weight
+                        
+                        # Height
+                        height = (doc.get("height") or doc.get("Height") or doc.get("height_cm") or 
+                                 doc.get("heightCm") or doc.get("身高"))
+                        if height:
+                            patient_info["height"] = height
+                        
+                        # BMI
+                        bmi = doc.get("bmi") or doc.get("BMI") or doc.get("bodyMassIndex")
+                        if bmi:
+                            patient_info["bmi"] = bmi
+                        
+                        # Medical history
+                        medical_history = (doc.get("medical_history") or doc.get("medicalHistory") or 
+                                         doc.get("disease_history") or doc.get("diseaseHistory") or
+                                         doc.get("conditions") or doc.get("Conditions") or
+                                         doc.get("diagnosis") or doc.get("Diagnosis"))
+                        if medical_history:
+                            patient_info["medical_history"] = str(medical_history)
+                        
+                        # Ethnicity
+                        ethnicity = (doc.get("ethnicity") or doc.get("Ethnicity") or 
+                                    doc.get("民族") or doc.get("race") or doc.get("Race"))
+                        if ethnicity:
+                            patient_info["ethnicity"] = str(ethnicity)
+                        
+                        # Region/Location
+                        region = (doc.get("region") or doc.get("Region") or 
+                                 doc.get("地域") or doc.get("location") or doc.get("Location") or
+                                 doc.get("address") or doc.get("Address") or
+                                 doc.get("city") or doc.get("City") or doc.get("state") or doc.get("State"))
+                        if region:
+                            patient_info["region"] = str(region)
+                        
+                        # Exercise intensity
+                        exercise = (doc.get("exercise_intensity") or doc.get("exerciseIntensity") or 
+                                   doc.get("运动强度") or doc.get("exerciseLevel") or doc.get("exercise_level"))
+                        if exercise:
+                            patient_info["exercise_intensity"] = str(exercise)
+                        
+                        # Medications
+                        medications = (doc.get("medications") or doc.get("Medications") or 
+                                      doc.get("current_medications") or doc.get("currentMedications") or
+                                      doc.get("用药") or doc.get("meds") or doc.get("Meds"))
+                        if medications:
+                            patient_info["medications"] = str(medications)
+                        
+                        # Name fields (for display)
+                        name = (doc.get("name") or doc.get("Name") or 
+                               doc.get("firstName") or doc.get("first_name") or
+                               (doc.get("firstName") and doc.get("lastName") and 
+                                f"{doc.get('firstName')} {doc.get('lastName')}"))
+                        if name:
+                            patient_info["name"] = str(name)
+                        
+                        # Calculate BMI if weight and height are available but BMI is not
                         if patient_info.get("weight") and patient_info.get("height") and not patient_info.get("bmi"):
                             try:
                                 weight_kg = float(patient_info["weight"])
-                                height_m = float(patient_info["height"]) / 100.0  # Convert cm to m
+                                height_val = float(patient_info["height"])
+                                # Assume height is in cm if > 3, otherwise in meters
+                                height_m = height_val / 100.0 if height_val > 3 else height_val
                                 if height_m > 0:
                                     patient_info["bmi"] = round(weight_kg / (height_m ** 2), 1)
                             except Exception:
                                 pass
                         
-                        if patient_info:
-                            print(f"[INFO] Found patient info from {collection_name} collection")
+                        # If we found any info, return (don't keep searching)
+                        if len(patient_info) > 1:  # More than just patient_id
+                            print(f"[INFO] Extracted patient info from {collection_name} collection")
                             return patient_info
                 except Exception as e:
+                    print(f"[DEBUG] Error querying {collection_name} with field {id_field}: {e}")
                     continue
         except Exception as e:
+            print(f"[DEBUG] Error accessing collection {collection_name}: {e}")
             continue
     
-    print(f"[WARN] Could not find patient info for {patient_id}, using defaults")
-    return patient_info
+    print(f"[INFO] Could not find detailed patient info for {patient_id}, using basic info (patient_id only)")
+    return patient_info  # Return at least patient_id
 
 
 # Removed extract_image_links_from_row - we'll get images directly from API
@@ -315,6 +573,23 @@ def get_food_log_image_urls(
                             print(f"[DEBUG] FoodLog {fid}: Image URL {i+1}: {link[:100]}..." if len(link) > 100 else f"[DEBUG] FoodLog {fid}: Image URL {i+1}: {link}")
                 else:
                     print(f"[WARN] FoodLog {fid}: No 'link' found in data.images[].link")
+                
+                # Extract description and comments from API response
+                # 从API响应中提取description和comments
+                data = payload.get("data", {})
+                if isinstance(data, dict):
+                    # Extract description (note field in API)
+                    if "note" in data and data["note"]:
+                        food_logs_df.at[idx, "Description"] = str(data["note"])
+                    elif "description" in data and data["description"]:
+                        food_logs_df.at[idx, "Description"] = str(data["description"])
+                    
+                    # Extract comments
+                    if "comments" in data and data["comments"]:
+                        # Store comments directly - can be list or dict
+                        food_logs_df.at[idx, "comments"] = data["comments"]
+                        if debug:
+                            print(f"[DEBUG] FoodLog {fid}: Found comments: {data['comments']}")
                     # Always show raw data when no links found (even without debug mode)
                     print(f"[DEBUG] FoodLog {fid}: Raw API response data:")
                     data = payload.get("data", {})
@@ -438,6 +713,71 @@ def parse_meal_type(row: pd.Series, language: str = 'zh') -> str:
     return t['other']
 
 
+def format_rd_comments(comments_data, language: str = 'zh') -> List[Dict[str, Any]]:
+    """
+    Format RD/dietitian comments from food log data.
+    格式化食物日志中的营养师评论。
+    
+    Args:
+        comments_data: Comments data (can be JSON string, dict, list, or None)
+        language: Language for labels ('zh' or 'en')
+        
+    Returns:
+        List of formatted comment dicts with 'text', 'commentedAt', 'commentedBy' fields
+    """
+    if comments_data is None:
+        return []
+    
+    formatted_comments = []
+    
+    # Parse JSON if it's a string
+    obj = comments_data
+    if isinstance(comments_data, str):
+        comments_data_strip = comments_data.strip()
+        if not comments_data_strip:
+            return []
+        # Try to parse as JSON
+        try:
+            obj = json.loads(comments_data_strip)
+        except (json.JSONDecodeError, ValueError):
+            # If not JSON, treat as plain text
+            if comments_data_strip:
+                formatted_comments.append({
+                    "text": comments_data_strip,
+                    "commentedAt": None,
+                    "commentedBy": None
+                })
+            return formatted_comments
+    
+    # Handle list of comments
+    if isinstance(obj, list):
+        for comment in obj:
+            if isinstance(comment, dict):
+                text = comment.get("text") or comment.get("originalText") or comment.get("Text")
+                commented_at = comment.get("commentedAt") or comment.get("commented_at")
+                commented_by = comment.get("commentedBy") or comment.get("commentedByUser")
+                if text:
+                    formatted_comments.append({
+                        "text": str(text),
+                        "commentedAt": commented_at,
+                        "commentedBy": commented_by
+                    })
+    
+    # Handle single comment dict
+    elif isinstance(obj, dict):
+        text = obj.get("text") or obj.get("originalText") or obj.get("Text")
+        commented_at = obj.get("commentedAt") or obj.get("commented_at")
+        commented_by = obj.get("commentedBy") or obj.get("commentedByUser")
+        if text:
+            formatted_comments.append({
+                "text": str(text),
+                "commentedAt": commented_at,
+                "commentedBy": commented_by
+            })
+    
+    return formatted_comments
+
+
 def extract_ingredients_summary(ingredients_data: Any) -> Dict[str, Any]:
     """
     Extract ingredients summary from ingredients data.
@@ -538,13 +878,29 @@ def generate_html_summary(
             'region': '地域',
             'exercise_intensity': '运动强度',
             'medications': '当前用药',
-            'food_log_summary': 'AI 1日食物日志总结',
+            'food_log_summary': '1日食物日志总结',
             'total_calories': '总热量',
             'kcal': 'kcal',
             'main_ingredients': '主要食材',
             'notes': '备注',
             'no_food_logs': '该日期没有食物日志记录',
-            'logged_at': '记录时间'
+            'logged_at': '记录时间',
+            'lab_results': '实验室检查结果',
+            'glucose_fasting': '空腹血糖',
+            'hba1c': 'HbA1c',
+            'cholesterol_total': '总胆固醇',
+            'ldl': 'LDL',
+            'hdl': 'HDL',
+            'triglycerides': '甘油三酯',
+            'blood_pressure': '血压',
+            'last_updated': '最后更新',
+            'glucose_data': '血糖数据',
+            'average': '平均',
+            'min': '最低',
+            'max': '最高',
+            'measurements': '测量次数',
+            'mg_dl': 'mg/dL',
+            'percent': '%'
         },
         'en': {
             'patient_info': 'Patient Information',
@@ -558,65 +914,113 @@ def generate_html_summary(
             'region': 'Region',
             'exercise_intensity': 'Exercise Intensity',
             'medications': 'Current Medications',
-            'food_log_summary': 'AI 1-Day Food Log Summary',
+            'food_log_summary': '1-Day Food Log Summary',
             'total_calories': 'Total Calories',
             'kcal': 'kcal',
             'main_ingredients': 'Main Ingredients',
             'notes': 'Notes',
             'no_food_logs': 'No food log records for this date',
-            'logged_at': 'Logged at'
+            'logged_at': 'Logged at',
+            'lab_results': 'Lab Results',
+            'glucose_fasting': 'Fasting Glucose',
+            'hba1c': 'HbA1c',
+            'cholesterol_total': 'Total Cholesterol',
+            'ldl': 'LDL',
+            'hdl': 'HDL',
+            'triglycerides': 'Triglycerides',
+            'blood_pressure': 'Blood Pressure',
+            'last_updated': 'Last Updated',
+            'glucose_data': 'Glucose Data',
+            'average': 'Average',
+            'min': 'Min',
+            'max': 'Max',
+            'measurements': 'Measurements',
+            'mg_dl': 'mg/dL',
+            'percent': '%'
         }
     }
     t = labels.get(language, labels['zh'])
     
     # Patient info section
+    # Always show at least patient ID
     patient_info_html = f"""
     <div class="patient-info">
         <h2>{t['patient_info']}</h2>
         <ul class="patient-details">
     """
     
-    if patient_info.get("age"):
-        gender = patient_info.get("gender") or ""
-        if gender:
-            gender_text = t['male'] if gender.lower() in ["male", "m", "男"] else t['female'] if gender.lower() in ["female", "f", "女"] else ""
-        else:
-            gender_text = ""
-        age_suffix = t['years_old'] if language == 'zh' else ''
-        patient_info_html += f'<li>{patient_info["age"]}{age_suffix}{gender_text}</li>'
+    # Always show patient ID
+    patient_id_display = patient_info.get("patient_id") or patient_id
+    patient_id_label = "患者ID" if language == 'zh' else "Patient ID"
+    patient_info_html += f'<li><strong>{patient_id_label}:</strong> {html.escape(str(patient_id_display))}</li>'
     
-    if patient_info.get("weight") and patient_info.get("height"):
-        patient_info_html += f'<li>{patient_info["weight"]}kg {patient_info["height"]}cm</li>'
-    elif patient_info.get("weight"):
-        patient_info_html += f'<li>{t["weight"]}: {patient_info["weight"]}kg</li>'
-    elif patient_info.get("height"):
-        patient_info_html += f'<li>{t["height"]}: {patient_info["height"]}cm</li>'
+    # Show name if available
+    if patient_info.get("name"):
+        name_label = "姓名" if language == 'zh' else "Name"
+        patient_info_html += f'<li><strong>{name_label}:</strong> {html.escape(str(patient_info["name"]))}</li>'
     
-    if patient_info.get("bmi"):
-        patient_info_html += f'<li>BMI: {patient_info["bmi"]}</li>'
+    # If patient info summary exists, display it first
+    # 如果有现成的patient info summary，优先显示
+    if patient_info.get("summary"):
+        summary_text = str(patient_info["summary"])
+        summary_label = t.get("summary", "患者背景" if language == 'zh' else "Patient Background")
+        patient_info_html += f'<li><strong>{summary_label}:</strong> {html.escape(summary_text)}</li>'
+    else:
+        # Show individual fields if no summary
+        if patient_info.get("age"):
+            gender = patient_info.get("gender") or ""
+            if gender:
+                gender_text = t['male'] if gender.lower() in ["male", "m", "男"] else t['female'] if gender.lower() in ["female", "f", "女"] else ""
+                gender_text = f", {gender_text}" if gender_text else ""
+            else:
+                gender_text = ""
+            age_suffix = t['years_old'] if language == 'zh' else ' years old'
+            age_label = "年龄" if language == 'zh' else "Age"
+            patient_info_html += f'<li>{age_label}: {patient_info["age"]}{age_suffix}{gender_text}</li>'
+        
+        if patient_info.get("weight") and patient_info.get("height"):
+            patient_info_html += f'<li>{t["weight"]}: {patient_info["weight"]}kg, {t["height"]}: {patient_info["height"]}cm</li>'
+        elif patient_info.get("weight"):
+            patient_info_html += f'<li>{t["weight"]}: {patient_info["weight"]}kg</li>'
+        elif patient_info.get("height"):
+            patient_info_html += f'<li>{t["height"]}: {patient_info["height"]}cm</li>'
+        
+        if patient_info.get("bmi"):
+            patient_info_html += f'<li>BMI: {patient_info["bmi"]}</li>'
+        
+        if patient_info.get("medical_history"):
+            medical_history = str(patient_info["medical_history"])
+            patient_info_html += f'<li>{t["medical_history"]}: {html.escape(medical_history)}</li>'
+        
+        if patient_info.get("ethnicity"):
+            patient_info_html += f'<li>{t["ethnicity"]}: {html.escape(str(patient_info["ethnicity"]))}</li>'
+        
+        if patient_info.get("region"):
+            patient_info_html += f'<li>{t["region"]}: {html.escape(str(patient_info["region"]))}</li>'
+        
+        if patient_info.get("exercise_intensity"):
+            exercise = str(patient_info["exercise_intensity"])
+            patient_info_html += f'<li>{t["exercise_intensity"]}: {html.escape(exercise)}</li>'
+        
+        if patient_info.get("medications"):
+            medications = str(patient_info["medications"])
+            patient_info_html += f'<li>{t["medications"]}: {html.escape(medications)}</li>'
     
-    if patient_info.get("medical_history"):
-        medical_history = str(patient_info["medical_history"])
-        patient_info_html += f'<li>{t["medical_history"]}: {html.escape(medical_history)}</li>'
-    
-    if patient_info.get("ethnicity"):
-        patient_info_html += f'<li>{t["ethnicity"]}: {html.escape(str(patient_info["ethnicity"]))}</li>'
-    
-    if patient_info.get("region"):
-        patient_info_html += f'<li>{t["region"]}: {html.escape(str(patient_info["region"]))}</li>'
-    
-    if patient_info.get("exercise_intensity"):
-        exercise = str(patient_info["exercise_intensity"])
-        patient_info_html += f'<li>{t["exercise_intensity"]}: {html.escape(exercise)}</li>'
-    
-    if patient_info.get("medications"):
-        medications = str(patient_info["medications"])
-        patient_info_html += f'<li>{t["medications"]}: {html.escape(medications)}</li>'
+    # If no additional info found, show a message
+    if len(patient_info) == 1:  # Only patient_id
+        no_info_msg = "暂无其他患者信息" if language == 'zh' else "No additional patient information available"
+        patient_info_html += f'<li style="color: #999; font-style: italic;">{no_info_msg}</li>'
     
     patient_info_html += """
         </ul>
     </div>
     """
+    
+    # Title based on language
+    if language == 'zh':
+        title = "AI食物日志总结 - 赋能患者, 提升照护师效率"
+    else:
+        title = "AI Food Log Summary - Empowering Patients, Enhancing Care Team Efficiency"
     
     # Food log summary section
     if language == 'zh':
@@ -689,10 +1093,11 @@ def generate_html_summary(
         
         food_log_html += f'<h3>{meal_type}{times_display}</h3>'
         
-        # Collect all images and ingredients for this meal
+        # Collect all images, ingredients, notes, and comments for this meal
         meal_images = []
         all_ingredients = []
         all_notes = []
+        all_comments = []  # Store comments separately
         
         for row in food_logs_by_meal[meal_type]:
             # Collect images - check for ImageURLs first (direct URLs from API)
@@ -749,16 +1154,31 @@ def generate_html_summary(
             ingredients_summary = extract_ingredients_summary(ingredients_data)
             all_ingredients.extend(ingredients_summary["main_ingredients"])
             
-            # Collect notes
-            description = str(row.get("Description", "") or row.get("description", "") or "").strip()
-            if description:
-                all_notes.append(description)
+            # Collect notes (description) - check multiple field names
+            # 收集备注（描述）- 检查多个字段名
+            description = (row.get("Description") or row.get("description") or 
+                          row.get("note") or row.get("Note") or "")
+            if description and pd.notna(description):
+                description_str = str(description).strip()
+                if description_str and description_str.lower() != "nan":
+                    all_notes.append(description_str)
             
-            rd_comments = row.get("RD Comments") or row.get("rd_comments")
-            if rd_comments:
-                rd_text = str(rd_comments).strip()
-                if rd_text:
-                    all_notes.append(rd_text)
+            # Collect RD/dietitian comments - check multiple possible field names
+            # 收集营养师评论 - 检查多个可能的字段名
+            comments_data = (row.get("comments") or row.get("Comments") or 
+                           row.get("RD Comments") or row.get("rd_comments") or
+                           row.get("rdComments") or row.get("comment"))
+            if comments_data and pd.notna(comments_data):
+                # Check if it's a string that needs parsing, or already a dict/list
+                if isinstance(comments_data, str):
+                    comments_str = comments_data.strip()
+                    if comments_str and comments_str.lower() != "nan":
+                        formatted_comments = format_rd_comments(comments_data, language)
+                        all_comments.extend(formatted_comments)
+                else:
+                    # Already a dict or list
+                    formatted_comments = format_rd_comments(comments_data, language)
+                    all_comments.extend(formatted_comments)
         
         # Display images
         if meal_images:
@@ -784,11 +1204,56 @@ def generate_html_summary(
             food_log_html += '</ul>'
             food_log_html += '</div>'
         
-        # Display notes
+        # Display notes (patient's description)
         if all_notes:
+            notes_label = "备注" if language == 'zh' else "Notes"
             food_log_html += '<div class="meal-notes">'
+            food_log_html += f'<div class="notes-label"><strong>{notes_label}:</strong></div>'
             for note in all_notes:
                 food_log_html += f'<p>{html.escape(note).replace(chr(10), "<br/>")}</p>'
+            food_log_html += '</div>'
+        
+        # Display dietitian/RD comments
+        if all_comments:
+            comments_label = "营养师评论" if language == 'zh' else "Dietitian Comments"
+            food_log_html += '<div class="meal-comments">'
+            food_log_html += f'<div class="comments-label"><strong>{comments_label}:</strong></div>'
+            for comment in all_comments:
+                comment_html = '<div class="comment-item">'
+                text = html.escape(comment.get("text", ""))
+                if text:
+                    comment_html += f'<div class="comment-text">{text}</div>'
+                
+                # Show commented by info if available
+                commented_by = comment.get("commentedBy")
+                if isinstance(commented_by, dict):
+                    name = commented_by.get("firstName") or commented_by.get("name") or ""
+                    if name:
+                        if commented_by.get("lastName"):
+                            name += f" {commented_by.get('lastName')}"
+                        commenter_title = commented_by.get("title") or ""
+                        if commenter_title:
+                            name += f" ({commenter_title})"
+                        comment_html += f'<div class="comment-by">— {html.escape(name)}</div>'
+                elif isinstance(commented_by, str) and commented_by:
+                    comment_html += f'<div class="comment-by">— {html.escape(commented_by)}</div>'
+                
+                # Show comment time if available
+                commented_at = comment.get("commentedAt")
+                if commented_at:
+                    try:
+                        # Try to parse and format the date
+                        dt = pd.to_datetime(commented_at)
+                        if language == 'zh':
+                            time_str = dt.strftime('%Y-%m-%d %H:%M')
+                        else:
+                            time_str = dt.strftime('%Y-%m-%d %I:%M %p')
+                        comment_html += f'<div class="comment-time">{time_str}</div>'
+                    except:
+                        comment_html += f'<div class="comment-time">{html.escape(str(commented_at))}</div>'
+                
+                comment_html += '</div>'
+                food_log_html += comment_html
             food_log_html += '</div>'
         
         food_log_html += '</div>'  # meal-section
@@ -946,12 +1411,18 @@ body {{
 .meal-notes {{
   margin-top: 20px;
   padding: 15px;
-  background: white;
+  background: #f0f7ff;
   border-radius: 8px;
   font-size: 13px;
   line-height: 1.8;
   color: #555;
   border-left: 3px solid #4a90e2;
+}}
+.notes-label {{
+  font-weight: 600;
+  margin-bottom: 10px;
+  color: #1e40af;
+  font-size: 14px;
 }}
 .meal-notes p {{
   margin: 8px 0;
@@ -961,6 +1432,46 @@ body {{
 }}
 .meal-notes p:last-child {{
   margin-bottom: 0;
+}}
+.meal-comments {{
+  margin-top: 15px;
+  padding: 12px;
+  background: #fff9e6;
+  border-left: 4px solid #ffc107;
+  border-radius: 4px;
+}}
+.comments-label {{
+  font-weight: 600;
+  margin-bottom: 10px;
+  color: #856404;
+  font-size: 14px;
+}}
+.comment-item {{
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #ffe082;
+}}
+.comment-item:last-child {{
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}}
+.comment-text {{
+  font-size: 14px;
+  color: #333;
+  line-height: 1.5;
+  margin-bottom: 6px;
+}}
+.comment-by {{
+  font-size: 12px;
+  color: #856404;
+  font-style: italic;
+  margin-top: 4px;
+}}
+.comment-time {{
+  font-size: 11px;
+  color: #999;
+  margin-top: 4px;
 }}
 @media (max-width: 1024px) {{
   .content {{
@@ -991,7 +1502,7 @@ body {{
 <body>
 <div class="container">
   <div class="header">
-    <h1>AI食谱 - 赋能患者,提升照护师效率</h1>
+    <h1>{title}</h1>
   </div>
   <div class="content">
     {patient_info_html}
