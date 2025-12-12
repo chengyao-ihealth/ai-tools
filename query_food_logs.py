@@ -290,6 +290,87 @@ def query_food_logs(
     return df
 
 
+def query_patient_all_logs(
+    client: MongoClient,
+    patient_id: str,
+    database_name: str = "UnifiedCare",
+) -> Dict[str, Any]:
+    """
+    Query all food logs for a single patient (no date range limit).
+    查询单个病人的所有food log（不限制日期范围）。
+    
+    Args:
+        client: MongoDB client / MongoDB客户端
+        patient_id: Patient ID / 病人ID
+        database_name: Database name / 数据库名称
+        
+    Returns:
+        Dict with total_logs, first_log_date, last_log_date / 
+        包含total_logs, first_log_date, last_log_date的字典
+    """
+    db = client[database_name]
+    collection = db["food_logs"]
+    
+    # Convert patient_id to ObjectId if valid
+    # 如果有效，将patient_id转换为ObjectId
+    try:
+        member_id = ObjectId(patient_id)
+    except Exception:
+        member_id = patient_id
+    
+    query_filter = {
+        "memberId": member_id,
+        "images": {"$exists": True, "$ne": None}
+    }
+    
+    try:
+        # Use aggregation to count and get date range
+        # 使用聚合管道统计并获取日期范围
+        pipeline = [
+            {"$match": query_filter},
+            {
+                "$addFields": {
+                    "has_images": {
+                        "$cond": {
+                            "if": {"$isArray": "$images"},
+                            "then": {"$gt": [{"$size": "$images"}, 0]},
+                            "else": False
+                        }
+                    }
+                }
+            },
+            {"$match": {"has_images": True}},
+            {
+                "$group": {
+                    "_id": None,
+                    "total_logs": {"$sum": 1},
+                    "first_log_date": {"$min": "$createdAt"},
+                    "last_log_date": {"$max": "$createdAt"}
+                }
+            }
+        ]
+        
+        result = list(collection.aggregate(pipeline))
+        if result and len(result) > 0:
+            return {
+                "total_logs": result[0].get("total_logs", 0),
+                "first_log_date": result[0].get("first_log_date"),
+                "last_log_date": result[0].get("last_log_date")
+            }
+        return {
+            "total_logs": 0,
+            "first_log_date": None,
+            "last_log_date": None
+        }
+    except Exception as e:
+        print(f"[WARN] Failed to query all logs for patient {patient_id} / 查询病人 {patient_id} 的全部log失败: {e}")
+        return {
+            "total_logs": 0,
+            "first_log_date": None,
+            "last_log_date": None
+        }
+
+
 def count_total_valid_food_logs(
     client: Any,
     database_name: str = "UnifiedCare",
@@ -522,6 +603,108 @@ def main():
             print(f"  - Total enrolled patients / 总注册病人数: {total_enrolled_patients}")
             if date_col:
                 print(f"  - Date range / 日期范围: {df[date_col].min()} to {df[date_col].max()}")
+            
+            # Calculate top 10 patients by food log count
+            # 计算food log最多的前10个病人
+            if patient_col:
+                # Calculate number of days in the date range
+                # 计算日期范围内的天数
+                num_days = 1
+                if args.days:
+                    # If --days parameter was used, use it directly
+                    # 如果使用了--days参数，直接使用它
+                    num_days = args.days
+                elif start_date and end_date:
+                    # Use the actual date range from query parameters
+                    # 使用查询参数中的实际日期范围
+                    # Normalize dates to date level (ignore time) for accurate day count
+                    # 将日期归一化到日期级别（忽略时间）以准确计算天数
+                    try:
+                        start_dt = pd.to_datetime(start_date)
+                        end_dt = pd.to_datetime(end_date)
+                        start_date_only = start_dt.date()
+                        end_date_only = end_dt.date()
+                        num_days = (end_date_only - start_date_only).days + 1
+                    except Exception:
+                        # Fallback to simple calculation
+                        # 回退到简单计算
+                        num_days = (end_date - start_date).days + 1
+                elif date_col:
+                    # Calculate from actual data
+                    # 从实际数据计算
+                    try:
+                        date_series = pd.to_datetime(df[date_col], errors='coerce')
+                        min_date = date_series.min()
+                        max_date = date_series.max()
+                        if pd.notna(min_date) and pd.notna(max_date):
+                            # Normalize to date level
+                            # 归一化到日期级别
+                            min_date_only = min_date.date()
+                            max_date_only = max_date.date()
+                            num_days = (max_date_only - min_date_only).days + 1
+                    except Exception:
+                        pass
+                
+                # Group by patient and count logs
+                # 按病人分组并统计log数
+                patient_log_counts = df.groupby(patient_col).size().reset_index(name='total_logs')
+                patient_log_counts = patient_log_counts.sort_values('total_logs', ascending=False)
+                
+                # Get top 10 patients
+                # 获取前10个病人
+                top_10_patients = patient_log_counts.head(10)
+                
+                if len(top_10_patients) > 0:
+                    print(f"\n[INFO] Top 10 Patients by Food Log Count / food log最多的前10个病人:")
+                    print(f"  (Date range: {num_days} days / 日期范围: {num_days} 天)")
+                    for rank, (idx, row) in enumerate(top_10_patients.iterrows(), start=1):
+                        patient_id = str(row[patient_col])
+                        logs_in_range = int(row['total_logs'])  # Logs within date range
+                        avg_logs_per_day = logs_in_range / num_days if num_days > 0 else 0
+                        
+                        # Query all historical logs for this patient
+                        # 查询该病人的所有历史log
+                        all_logs_info = query_patient_all_logs(
+                            client,
+                            patient_id,
+                            database_name=args.database
+                        )
+                        total_all_logs = all_logs_info["total_logs"]
+                        first_log_date = all_logs_info["first_log_date"]
+                        last_log_date = all_logs_info["last_log_date"]
+                        
+                        print(f"  {rank}. Patient ID: {patient_id}")
+                        
+                        # Format dates for display (only date part, no time)
+                        # 格式化日期显示（只显示日期部分，不显示时间）
+                        first_date_str = ""
+                        last_date_str = ""
+                        if first_log_date:
+                            if isinstance(first_log_date, datetime):
+                                first_date_str = first_log_date.strftime("%Y-%m-%d")
+                            else:
+                                try:
+                                    first_date_str = pd.to_datetime(first_log_date).strftime("%Y-%m-%d")
+                                except:
+                                    first_date_str = str(first_log_date)
+                        if last_log_date:
+                            if isinstance(last_log_date, datetime):
+                                last_date_str = last_log_date.strftime("%Y-%m-%d")
+                            else:
+                                try:
+                                    last_date_str = pd.to_datetime(last_log_date).strftime("%Y-%m-%d")
+                                except:
+                                    last_date_str = str(last_log_date)
+                        
+                        # Format total logs line with date range
+                        # 格式化总log数行，包含日期范围
+                        if first_date_str and last_date_str:
+                            print(f"     - Total logs (all time) / 从开始log起的总log数: {total_all_logs}, from {first_date_str} to {last_date_str}")
+                        else:
+                            print(f"     - Total logs (all time) / 从开始log起的总log数: {total_all_logs}")
+                        
+                        print(f"     - Logs in date range / 日期范围内log数: {logs_in_range}")
+                        print(f"     - Average logs per day (in range) / 每天平均log数（日期范围内）: {avg_logs_per_day:.2f}")
             
             if not args.no_export:
                 output_path = Path(args.output)
