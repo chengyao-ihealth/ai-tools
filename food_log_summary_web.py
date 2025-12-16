@@ -216,6 +216,142 @@ def get_all_patient_ids_with_food_logs(
         return []
 
 
+def get_care_notes(
+    client: MongoClient,
+    patient_id: str,
+    database_name: str = "UnifiedCare"
+) -> List[Dict[str, Any]]:
+    """
+    Get care notes for a patient from uc_care_notes collection.
+    从uc_care_notes集合获取病人的care notes。
+    
+    Args:
+        client: MongoDB client / MongoDB客户端
+        patient_id: Patient ID / 病人ID
+        database_name: Database name / 数据库名称
+        
+    Returns:
+        List of care notes / care notes列表
+    """
+    db = client[database_name]
+    collection = db["uc_care_notes"]
+    
+    try:
+        # Convert patient_id to ObjectId if valid
+        # 如果有效，将patient_id转换为ObjectId
+        try:
+            member_id = ObjectId(patient_id)
+        except Exception:
+            member_id = patient_id
+        
+        # Query care notes - try different field names for patient ID
+        # 查询care notes - 尝试不同的病人ID字段名
+        care_notes = []
+        
+        # Try memberId field
+        # 尝试memberId字段
+        query_filter = {"memberId": member_id}
+        notes = list(collection.find(query_filter).sort("createdAt", -1))
+        if notes:
+            care_notes = notes
+        else:
+            # Try patient_id field
+            # 尝试patient_id字段
+            query_filter = {"patient_id": member_id}
+            notes = list(collection.find(query_filter).sort("createdAt", -1))
+            if notes:
+                care_notes = notes
+            else:
+                # Try _id field
+                # 尝试_id字段
+                query_filter = {"_id": member_id}
+                notes = list(collection.find(query_filter).sort("createdAt", -1))
+                if notes:
+                    care_notes = notes
+        
+        # Convert to list of dicts and handle ObjectId and datetime
+        # 转换为字典列表并处理ObjectId和datetime
+        result = []
+        for note in care_notes:
+            note_dict = {}
+            for key, value in note.items():
+                if isinstance(value, ObjectId):
+                    note_dict[key] = str(value)
+                elif isinstance(value, datetime):
+                    note_dict[key] = value.isoformat()
+                else:
+                    note_dict[key] = value
+            result.append(note_dict)
+        
+        return result
+    except Exception as e:
+        print(f"[WARN] Failed to get care notes for patient {patient_id}: {e}", file=sys.stderr)
+        return []
+
+
+def get_care_note_by_id(
+    client: MongoClient,
+    patient_id: str,
+    note_id: str,
+    database_name: str = "UnifiedCare"
+) -> Optional[Dict[str, Any]]:
+    """
+    Get a single care note by ID for a patient.
+    根据ID获取单个care note。
+    
+    Args:
+        client: MongoDB client / MongoDB客户端
+        patient_id: Patient ID / 病人ID
+        note_id: Care note ID / Care note ID
+        database_name: Database name / 数据库名称
+        
+    Returns:
+        Care note dict or None / care note字典或None
+    """
+    db = client[database_name]
+    collection = db["uc_care_notes"]
+    
+    try:
+        # Convert IDs to ObjectId if valid
+        # 如果有效，将ID转换为ObjectId
+        try:
+            member_id = ObjectId(patient_id)
+        except Exception:
+            member_id = patient_id
+        
+        try:
+            note_obj_id = ObjectId(note_id)
+        except Exception:
+            note_obj_id = note_id
+        
+        # Try to find the note by _id first
+        # 首先尝试通过_id查找note
+        note = collection.find_one({"_id": note_obj_id})
+        
+        if note:
+            # Verify it belongs to the patient
+            # 验证它属于该病人
+            if (str(note.get("memberId", "")) == str(member_id) or 
+                str(note.get("patient_id", "")) == str(member_id) or
+                str(note.get("_id", "")) == str(member_id)):
+                # Convert to dict and handle ObjectId and datetime
+                # 转换为字典并处理ObjectId和datetime
+                note_dict = {}
+                for key, value in note.items():
+                    if isinstance(value, ObjectId):
+                        note_dict[key] = str(value)
+                    elif isinstance(value, datetime):
+                        note_dict[key] = value.isoformat()
+                    else:
+                        note_dict[key] = value
+                return note_dict
+        
+        return None
+    except Exception as e:
+        print(f"[WARN] Failed to get care note {note_id} for patient {patient_id}: {e}", file=sys.stderr)
+        return None
+
+
 # HTML Template for the web interface
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -377,6 +513,10 @@ HTML_TEMPLATE = """
                     <div id="topDaysLabel" style="margin-top: 10px; font-weight: 600;">日志数量最多的五天:</div>
                     <div id="topDaysList" style="margin-left: 10px; margin-top: 5px;"></div>
                 </div>
+                <div class="patient-info-display" id="careNotesInfo" style="display: none; margin-top: 15px;">
+                    <div id="careNotesLabel" style="font-weight: 600; margin-bottom: 8px;">Care Notes:</div>
+                    <div id="careNotesList" style="margin-left: 10px;"></div>
+                </div>
             </div>
             
             <div class="form-group">
@@ -427,6 +567,8 @@ HTML_TEMPLATE = """
                 earliestDate: '最早日期:',
                 latestDate: '最晚日期:',
                 topDays: '日志数量最多的五天:',
+                careNotes: 'Care Notes:',
+                noCareNotes: '暂无Care Notes',
                 pleaseSelect: '请选择病人 ID...',
                 loadingText: '加载中...',
                 errorLoading: '加载失败，请刷新页面重试',
@@ -445,6 +587,8 @@ HTML_TEMPLATE = """
                 earliestDate: 'Earliest Date:',
                 latestDate: 'Latest Date:',
                 topDays: 'Top 5 Days with Most Logs:',
+                careNotes: 'Care Notes:',
+                noCareNotes: 'No Care Notes',
                 pleaseSelect: 'Please select Patient ID...',
                 loadingText: 'Loading...',
                 errorLoading: 'Failed to load, please refresh and try again',
@@ -490,6 +634,12 @@ HTML_TEMPLATE = """
                 const topDaysLabelEl = document.getElementById('topDaysLabel');
                 if (topDaysLabelEl) {
                     topDaysLabelEl.textContent = t.topDays;
+                }
+                
+                // Update care notes label if element exists
+                const careNotesLabelEl = document.getElementById('careNotesLabel');
+                if (careNotesLabelEl) {
+                    careNotesLabelEl.textContent = t.careNotes;
                 }
             }
         }
@@ -696,6 +846,7 @@ HTML_TEMPLATE = """
                             document.getElementById('patientInfo').style.display = 'block';
                         } else {
                             document.getElementById('patientInfo').style.display = 'none';
+                            document.getElementById('careNotesInfo').style.display = 'none';
                         }
                     });
                 })
@@ -727,6 +878,8 @@ HTML_TEMPLATE = """
             document.getElementById('error').classList.remove('active');
             document.getElementById('resultContainer').classList.remove('active');
             document.getElementById('generateBtn').disabled = true;
+            // Hide care notes during loading
+            document.getElementById('careNotesInfo').style.display = 'none';
             
             try {
                 const debugMode = document.getElementById('debugCheckbox').checked;
@@ -753,13 +906,29 @@ HTML_TEMPLATE = """
                     frame.srcdoc = data.html;
                     document.getElementById('resultContainer').classList.add('active');
                     
-                    // Show debug info if available
+                        // Show debug info if available
                     if (data.debug) {
                         console.log('=== Debug Information ===');
                         console.log('Patient Info:', data.debug.patient_info);
                         console.log('Food Logs Count:', data.debug.food_logs_count);
                         console.log('Food Logs Raw Data (from MongoDB):', data.debug.food_logs_raw);
                         console.log('API Responses (from GET /food-log/{id}):', data.debug.api_responses);
+                        
+                        // Always show care notes info, even if empty
+                        // 始终显示 care notes 信息，即使为空
+                        console.log('\\n=== Care Notes (from uc_care_notes) ===');
+                        if (data.debug.care_notes !== undefined) {
+                            if (data.debug.care_notes && data.debug.care_notes.length > 0) {
+                                console.log(`Found ${data.debug.care_notes.length} care note(s):`);
+                                data.debug.care_notes.forEach((note, index) => {
+                                    console.log(`\\nCare Note ${index + 1}:`, JSON.stringify(note, null, 2));
+                                });
+                            } else {
+                                console.log('Care Notes: [] (No care notes found for this patient)');
+                            }
+                        } else {
+                            console.log('Care Notes: undefined (not queried)');
+                        }
                         console.log('========================');
                         
                         // Show complete data in console
@@ -779,13 +948,28 @@ HTML_TEMPLATE = """
                         
                         // Show summary in alert
                         let debugText = '=== Debug Information ===\\n\\n';
-                        debugText += 'Food Logs Count: ' + data.debug.food_logs_count + '\\n\\n';
-                        debugText += 'Complete data available in browser console (F12)\\n';
+                        debugText += 'Food Logs Count: ' + data.debug.food_logs_count + '\\n';
+                        if (data.debug.care_notes !== undefined) {
+                            debugText += 'Care Notes Count: ' + (data.debug.care_notes ? data.debug.care_notes.length : 0) + '\\n';
+                        }
+                        debugText += '\\nComplete data available in browser console (F12)\\n';
                         debugText += '\\n- Food Logs Raw Data (from MongoDB)\\n';
                         debugText += '- API Responses (from GET /food-log/{id})\\n';
+                        if (data.debug.care_notes !== undefined) {
+                            debugText += '- Care Notes (from uc_care_notes)\\n';
+                        }
                         debugText += '\\nOpen browser console to see full details.';
                         
                         alert(debugText);
+                    }
+                    
+                    // Care notes are now displayed in the generated HTML summary (Patient Information section)
+                    // Care notes 现在显示在生成的 HTML 总结中（Patient Information 部分）
+                    // Hide care notes section on the main page
+                    // 在主页面隐藏 care notes 部分
+                    const careNotesInfo = document.getElementById('careNotesInfo');
+                    if (careNotesInfo) {
+                        careNotesInfo.style.display = 'none';
                     }
                     
                     // Scroll to result
@@ -877,6 +1061,13 @@ def api_generate_summary():
             # Get patient info
             patient_info = get_patient_info(client, patient_id, DATABASE_NAME)
             
+            # Get care notes
+            care_notes = get_care_notes(client, patient_id, DATABASE_NAME)
+            if debug:
+                print(f"[DEBUG] Care notes count: {len(care_notes) if care_notes else 0}")
+                if care_notes:
+                    print(f"[DEBUG] Sample care note: {care_notes[0] if len(care_notes) > 0 else 'N/A'}")
+            
             # Query food logs
             food_logs_df = query_food_logs(
                 client,
@@ -886,76 +1077,88 @@ def api_generate_summary():
                 end_date=end_date
             )
             
-            if food_logs_df.empty:
-                client.close()
-                return jsonify({
-                    "error": f"未找到病人 {patient_id} 在 {date_str} 的食物日志记录"
-                }), 404
-            
             # Setup images directory
             IMAGES_DIR.mkdir(parents=True, exist_ok=True)
             
-            # Download images if session token is provided
+            # Handle empty food logs - still show patient info and care notes
+            # 处理空的 food logs - 仍然显示病人信息和 care notes
+            has_food_logs = not food_logs_df.empty
+            
+            # Download images if session token is provided (only if there are food logs)
             # Note: This will also try to extract images from MongoDB images field
-            if debug:
-                print(f"[DEBUG] Before image download - ImgName column exists: {'ImgName' in food_logs_df.columns}")
-                if 'images' in food_logs_df.columns:
-                    print(f"[DEBUG] Sample images field: {food_logs_df.iloc[0]['images'] if not food_logs_df.empty else 'N/A'}")
-            
-            # Get image URLs from API
             api_responses = {}
-            if SESSION_TOKEN:
+            if has_food_logs:
                 if debug:
-                    print("[DEBUG] Debug mode: ON - will show detailed FoodLog ID information")
-                food_logs_df, api_responses = get_food_log_image_urls(
-                    food_logs_df,
-                    SESSION_TOKEN,
-                    debug=debug
-                )
-            
-            if debug:
-                print(f"[DEBUG] After image download - ImgName column: {food_logs_df['ImgName'].tolist() if 'ImgName' in food_logs_df.columns else 'Not found'}")
-            
-            # Group by meal type
-            food_logs_by_meal = group_food_logs_by_meal(food_logs_df, language=language)
+                    print(f"[DEBUG] Before image download - ImgName column exists: {'ImgName' in food_logs_df.columns}")
+                    if 'images' in food_logs_df.columns:
+                        print(f"[DEBUG] Sample images field: {food_logs_df.iloc[0]['images'] if not food_logs_df.empty else 'N/A'}")
+                
+                # Get image URLs from API
+                if SESSION_TOKEN:
+                    if debug:
+                        print("[DEBUG] Debug mode: ON - will show detailed FoodLog ID information")
+                    food_logs_df, api_responses = get_food_log_image_urls(
+                        food_logs_df,
+                        SESSION_TOKEN,
+                        debug=debug
+                    )
+                
+                if debug:
+                    print(f"[DEBUG] After image download - ImgName column: {food_logs_df['ImgName'].tolist() if 'ImgName' in food_logs_df.columns else 'Not found'}")
+                
+                # Group by meal type
+                food_logs_by_meal = group_food_logs_by_meal(food_logs_df, language=language)
+            else:
+                # No food logs - create empty meal structure
+                # 没有 food logs - 创建空的 meal 结构
+                food_logs_by_meal = {
+                    "breakfast": [],
+                    "lunch": [],
+                    "dinner": [],
+                    "snack": [],
+                    "other": []
+                }
             
             # Prepare debug info if requested
             debug_info = {}
             if debug:
                 # Convert DataFrame to list of dicts for JSON serialization
                 food_logs_raw = []
-                for _, row in food_logs_df.iterrows():
-                    food_log_dict = {}
-                    for col in food_logs_df.columns:
-                        val = row[col]
-                        # Handle different data types safely
-                        try:
-                            if pd.isna(val):
-                                food_log_dict[col] = None
-                            elif isinstance(val, (list, dict)):
-                                # Keep as is for JSON serialization
-                                food_log_dict[col] = val
-                            elif isinstance(val, (pd.Timestamp, datetime)):
-                                # Convert datetime to ISO string
-                                food_log_dict[col] = val.isoformat() if hasattr(val, 'isoformat') else str(val)
-                            elif isinstance(val, ObjectId):
-                                # Convert ObjectId to string
-                                food_log_dict[col] = str(val)
-                            else:
-                                food_log_dict[col] = val
-                        except (TypeError, ValueError) as e:
-                            # If conversion fails, try to stringify
+                if has_food_logs:
+                    for _, row in food_logs_df.iterrows():
+                        food_log_dict = {}
+                        for col in food_logs_df.columns:
+                            val = row[col]
+                            # Handle different data types safely
                             try:
-                                food_log_dict[col] = str(val)
-                            except:
-                                food_log_dict[col] = f"<unable to convert: {type(val)}>"
-                    food_logs_raw.append(food_log_dict)
+                                if pd.isna(val):
+                                    food_log_dict[col] = None
+                                elif isinstance(val, (list, dict)):
+                                    # Keep as is for JSON serialization
+                                    food_log_dict[col] = val
+                                elif isinstance(val, (pd.Timestamp, datetime)):
+                                    # Convert datetime to ISO string
+                                    food_log_dict[col] = val.isoformat() if hasattr(val, 'isoformat') else str(val)
+                                elif isinstance(val, ObjectId):
+                                    # Convert ObjectId to string
+                                    food_log_dict[col] = str(val)
+                                else:
+                                    food_log_dict[col] = val
+                            except (TypeError, ValueError) as e:
+                                # If conversion fails, try to stringify
+                                try:
+                                    food_log_dict[col] = str(val)
+                                except:
+                                    food_log_dict[col] = f"<unable to convert: {type(val)}>"
+                        food_logs_raw.append(food_log_dict)
                 
                 debug_info = {
                     "patient_info": patient_info,
-                    "food_logs_count": len(food_logs_df),
+                    "food_logs_count": len(food_logs_df) if has_food_logs else 0,
                     "food_logs_raw": food_logs_raw,  # Complete raw food log data from MongoDB
-                    "api_responses": api_responses  # Complete API responses for each food log
+                    "api_responses": api_responses,  # Complete API responses for each food log
+                    "care_notes": care_notes,  # Care notes from uc_care_notes collection
+                    "has_food_logs": has_food_logs  # Flag indicating if food logs exist
                 }
             
             # Generate HTML (use data URI for images in iframe)
@@ -967,14 +1170,16 @@ def api_generate_summary():
                 patient_id,
                 use_data_uri=True,  # Use data URI for iframe compatibility
                 image_base_url=None,
-                language=language
+                language=language,
+                care_notes=care_notes  # Pass care notes to include in Patient Information section
             )
             
             client.close()
             
             response = {
                 "success": True,
-                "html": html_content
+                "html": html_content,
+                "care_notes": care_notes
             }
             
             if debug:
@@ -995,6 +1200,174 @@ def api_generate_summary():
 def serve_image(filename):
     """Serve images from images directory."""
     return send_from_directory(str(IMAGES_DIR), filename)
+
+
+@app.route('/care-note/<patient_id>/<note_id>')
+def care_note_detail(patient_id, note_id):
+    """Display detailed care note page."""
+    try:
+        client = get_mongo_client(MONGO_URI)
+        
+        # Try to get note by ID first
+        # 首先尝试通过ID获取note
+        note = get_care_note_by_id(client, patient_id, note_id, DATABASE_NAME)
+        
+        # If not found and note_id is a number, try to get by index
+        # 如果未找到且note_id是数字，尝试通过索引获取
+        if not note and note_id.isdigit():
+            all_notes = get_care_notes(client, patient_id, DATABASE_NAME)
+            try:
+                index = int(note_id)
+                if 0 <= index < len(all_notes):
+                    note = all_notes[index]
+            except (ValueError, IndexError):
+                pass
+        
+        client.close()
+        
+        if not note:
+            return render_template_string("""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="utf-8">
+                <title>Care Note Not Found</title>
+                <style>
+                    body { font-family: Arial, sans-serif; margin: 40px; text-align: center; }
+                    .error { color: #d32f2f; }
+                </style>
+            </head>
+            <body>
+                <h1 class="error">Care Note Not Found</h1>
+                <p>The requested care note could not be found.</p>
+                <a href="/">← Back to Home</a>
+            </body>
+            </html>
+            """), 404
+        
+        # Format note content
+        note_content = ''
+        if note.get('note'):
+            note_content = note['note']
+        elif note.get('content'):
+            note_content = note['content']
+        elif note.get('text'):
+            note_content = note['text']
+        else:
+            # Show all fields
+            fields = []
+            for key, value in note.items():
+                if key not in ['_id', 'memberId', 'patient_id']:
+                    if isinstance(value, dict):
+                        fields.append(f"<strong>{key}:</strong> {json.dumps(value, indent=2, ensure_ascii=False)}")
+                    elif isinstance(value, list):
+                        fields.append(f"<strong>{key}:</strong> {json.dumps(value, indent=2, ensure_ascii=False)}")
+                    else:
+                        fields.append(f"<strong>{key}:</strong> {value}")
+            note_content = '<br>'.join(fields) if fields else 'No content'
+        
+        # Format date
+        date_str = ''
+        if note.get('createdAt'):
+            try:
+                date = datetime.fromisoformat(note['createdAt'].replace('Z', '+00:00'))
+                date_str = date.strftime('%Y-%m-%d %H:%M:%S')
+            except:
+                date_str = str(note.get('createdAt', ''))
+        
+        # Create HTML page
+        html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>Care Note Details</title>
+            <style>
+                body {{
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, Helvetica, Arial, sans-serif;
+                    margin: 0;
+                    padding: 20px;
+                    background: #f5f5f5;
+                    color: #333;
+                }}
+                .container {{
+                    max-width: 900px;
+                    margin: 0 auto;
+                    background: white;
+                    border-radius: 8px;
+                    padding: 30px;
+                    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                }}
+                h1 {{
+                    margin-top: 0;
+                    color: #2c3e50;
+                    border-bottom: 3px solid #4a90e2;
+                    padding-bottom: 15px;
+                }}
+                .meta {{
+                    color: #666;
+                    font-size: 14px;
+                    margin-bottom: 20px;
+                    padding-bottom: 15px;
+                    border-bottom: 1px solid #e0e0e0;
+                }}
+                .content {{
+                    font-size: 15px;
+                    line-height: 1.6;
+                    white-space: pre-wrap;
+                    word-wrap: break-word;
+                }}
+                .back-link {{
+                    display: inline-block;
+                    margin-top: 20px;
+                    color: #4a90e2;
+                    text-decoration: none;
+                    font-weight: 600;
+                }}
+                .back-link:hover {{
+                    text-decoration: underline;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>Care Note Details</h1>
+                <div class="meta">
+                    <strong>Patient ID:</strong> {patient_id}<br>
+                    {f'<strong>Date:</strong> {date_str}<br>' if date_str else ''}
+                    <strong>Note ID:</strong> {note_id}
+                </div>
+                <div class="content">{note_content}</div>
+                <a href="/" class="back-link">← Back to Home</a>
+            </div>
+        </body>
+        </html>
+        """
+        
+        return render_template_string(html)
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return render_template_string(f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <title>Error</title>
+            <style>
+                body {{ font-family: Arial, sans-serif; margin: 40px; }}
+                .error {{ color: #d32f2f; }}
+            </style>
+        </head>
+        <body>
+            <h1 class="error">Error</h1>
+            <p>{str(e)}</p>
+            <a href="/">← Back to Home</a>
+        </body>
+        </html>
+        """), 500
 
 
 if __name__ == '__main__':

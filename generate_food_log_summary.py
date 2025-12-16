@@ -943,7 +943,8 @@ def generate_html_summary(
     patient_id: str,
     use_data_uri: bool = True,
     image_base_url: Optional[str] = None,
-    language: str = 'zh'
+    language: str = 'zh',
+    care_notes: Optional[List[Dict[str, Any]]] = None
 ) -> str:
     """
     Generate HTML summary similar to the attached image format.
@@ -1075,53 +1076,53 @@ def generate_html_summary(
         
         age_suffix = t['years_old'] if language == 'zh' else ' years old'
         age_label = "年龄" if language == 'zh' else "Age"
-        patient_info_html += f'<li>{age_label}: {age_val}{age_suffix}{gender_text}{gender_identity_text}</li>'
+        patient_info_html += f'<li><strong>{age_label}:</strong> {age_val}{age_suffix}{gender_text}{gender_identity_text}</li>'
     
     # Weight and Height
     weight_val = patient_info.get("weight")
     height_val = patient_info.get("height")
     if weight_val is not None and weight_val != "" and height_val is not None and height_val != "":
-        patient_info_html += f'<li>{t["weight"]}: {weight_val}kg, {t["height"]}: {height_val}cm</li>'
+        patient_info_html += f'<li><strong>{t["weight"]}:</strong> {weight_val}kg, <strong>{t["height"]}:</strong> {height_val}cm</li>'
     elif weight_val is not None and weight_val != "":
-        patient_info_html += f'<li>{t["weight"]}: {weight_val}kg</li>'
+        patient_info_html += f'<li><strong>{t["weight"]}:</strong> {weight_val}kg</li>'
     elif height_val is not None and height_val != "":
-        patient_info_html += f'<li>{t["height"]}: {height_val}cm</li>'
+        patient_info_html += f'<li><strong>{t["height"]}:</strong> {height_val}cm</li>'
     
     # BMI
     bmi_val = patient_info.get("bmi")
     if bmi_val is not None and bmi_val != "":
-        patient_info_html += f'<li>BMI: {bmi_val}</li>'
+        patient_info_html += f'<li><strong>BMI:</strong> {bmi_val}</li>'
     
     # Medical history (from healthConditions)
     medical_history = patient_info.get("medical_history")
     if medical_history and str(medical_history).strip():
-        patient_info_html += f'<li>{t["medical_history"]}: {html.escape(str(medical_history))}</li>'
+        patient_info_html += f'<li><strong>{t["medical_history"]}:</strong> {html.escape(str(medical_history))}</li>'
     
     # Diagnoses (from diagnoses_display)
     diagnoses = patient_info.get("diagnoses")
     if diagnoses and str(diagnoses).strip():
         diagnoses_label = "诊断" if language == 'zh' else "Diagnoses"
-        patient_info_html += f'<li>{diagnoses_label}: {html.escape(str(diagnoses))}</li>'
+        patient_info_html += f'<li><strong>{diagnoses_label}:</strong> {html.escape(str(diagnoses))}</li>'
     
     # Ethnicity
     ethnicity = patient_info.get("ethnicity")
     if ethnicity and str(ethnicity).strip():
-        patient_info_html += f'<li>{t["ethnicity"]}: {html.escape(str(ethnicity))}</li>'
+        patient_info_html += f'<li><strong>{t["ethnicity"]}:</strong> {html.escape(str(ethnicity))}</li>'
     
     # Region
     region = patient_info.get("region")
     if region and str(region).strip():
-        patient_info_html += f'<li>{t["region"]}: {html.escape(str(region))}</li>'
+        patient_info_html += f'<li><strong>{t["region"]}:</strong> {html.escape(str(region))}</li>'
     
     # Exercise intensity
     exercise = patient_info.get("exercise_intensity")
     if exercise and str(exercise).strip():
-        patient_info_html += f'<li>{t["exercise_intensity"]}: {html.escape(str(exercise))}</li>'
+        patient_info_html += f'<li><strong>{t["exercise_intensity"]}:</strong> {html.escape(str(exercise))}</li>'
     
     # Medications
     medications = patient_info.get("medications")
     if medications and str(medications).strip():
-        patient_info_html += f'<li>{t["medications"]}: {html.escape(str(medications))}</li>'
+        patient_info_html += f'<li><strong>{t["medications"]}:</strong> {html.escape(str(medications))}</li>'
     
     # If no additional info found, show a message
     if len(patient_info) == 1:  # Only patient_id
@@ -1130,6 +1131,80 @@ def generate_html_summary(
     
     patient_info_html += """
         </ul>
+    """
+    
+    # Add care notes section if available
+    # 如果可用，添加 care notes 部分
+    if care_notes and len(care_notes) > 0:
+        care_notes_label = "Care Notes" if language == 'en' else "Care Notes"
+        view_details_text = "查看详情" if language == 'zh' else "View Details"
+        patient_info_html += f"""
+        <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #e0e0e0;">
+            <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px; color: #2c3e50;">{care_notes_label}</h3>
+            <div style="max-height: 300px; overflow-y: auto;">
+        """
+        
+        for index, note in enumerate(care_notes):
+            # Get full note text for summary
+            full_note_text = ''
+            if note.get('note'):
+                full_note_text = note['note']
+            elif note.get('content'):
+                full_note_text = note['content']
+            elif note.get('text'):
+                full_note_text = note['text']
+            else:
+                # Show all fields if no specific note field
+                fields = []
+                for key, value in note.items():
+                    if key not in ['_id', 'memberId', 'patient_id']:
+                        if isinstance(value, (dict, list)):
+                            fields.append(f"{key}: {json.dumps(value, ensure_ascii=False)}")
+                        else:
+                            fields.append(f"{key}: {value}")
+                full_note_text = ', '.join(fields) if fields else 'No content'
+            
+            # Create summary (first 100 characters)
+            summary = full_note_text[:100] + '...' if len(full_note_text) > 100 else full_note_text
+            
+            # Format date if available
+            date_str = ''
+            if note.get('createdAt'):
+                try:
+                    if isinstance(note['createdAt'], str):
+                        date_obj = datetime.fromisoformat(note['createdAt'].replace('Z', '+00:00'))
+                    else:
+                        date_obj = note['createdAt']
+                    date_str = date_obj.strftime('%Y-%m-%d')
+                except:
+                    date_str = str(note.get('createdAt', ''))
+            
+            # Create link to view full note
+            note_id = str(note.get('_id', index))
+            
+            patient_info_html += f"""
+            <div style="margin: 8px 0; padding: 8px; background: #f8f9fa; border-left: 3px solid #4a90e2; border-radius: 4px;">
+                {f'<div style="font-size: 11px; color: #999; margin-bottom: 4px;">{html.escape(date_str)}</div>' if date_str else ''}
+                <div style="font-size: 13px; color: #333; margin-bottom: 6px;">{html.escape(summary)}</div>
+                <a href="/care-note/{html.escape(str(patient_id))}/{html.escape(note_id)}" target="_blank" style="font-size: 12px; color: #4a90e2; text-decoration: none; font-weight: 600;">{view_details_text} →</a>
+            </div>
+            """
+        
+        patient_info_html += """
+            </div>
+        </div>
+        """
+    elif care_notes is not None:
+        # Show message if no care notes
+        no_care_notes_text = "暂无Care Notes" if language == 'zh' else "No Care Notes"
+        patient_info_html += f"""
+        <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #e0e0e0;">
+            <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px; color: #2c3e50;">Care Notes</h3>
+            <div style="color: #999; font-style: italic;">{no_care_notes_text}</div>
+        </div>
+        """
+    
+    patient_info_html += """
     </div>
     """
     
@@ -1148,242 +1223,259 @@ def generate_html_summary(
     food_log_html = '<div class="food-log-summary">'
     food_log_html += f'<h2>{t["food_log_summary"]}</h2>'
     
-    # Calculate total calories if possible
-    total_calories_info = ""
-    
+    # Check if there are any food logs at all
+    # 检查是否有任何 food logs
+    has_any_food_logs = False
     for meal_type in meal_order:
-        if meal_type not in food_logs_by_meal or not food_logs_by_meal[meal_type]:
-            continue
+        if meal_type in food_logs_by_meal and food_logs_by_meal[meal_type]:
+            has_any_food_logs = True
+            break
+    
+    # If no food logs, show message
+    # 如果没有 food logs，显示消息
+    if not has_any_food_logs:
+        food_log_html += f'<p style="color: #999; font-style: italic; padding: 20px; text-align: center;">{t["no_food_logs"]}</p>'
+        food_log_html += '</div>'
+        # Continue to build the rest of the HTML (patient info is already built)
+        # 继续构建 HTML 的其余部分（病人信息已经构建）
+    else:
+        # Calculate total calories if possible
+        # 如果可能，计算总热量
+        total_calories_info = ""
         
-        food_log_html += f'<div class="meal-section">'
-        
-        # Collect all timestamps for this meal
-        # Convert to PT timezone if timezone info is available, otherwise keep as-is
-        meal_times = []
-        pt_timezone = pytz.timezone('America/Los_Angeles')
-        
-        for row in food_logs_by_meal[meal_type]:
-            # Try to get timestamp from various fields
-            timestamp = None
-            for field in ["createdAt", "created_at", "uploadedAt", "uploaded_at"]:
-                if field in row and pd.notna(row[field]):
-                    try:
-                        timestamp = pd.to_datetime(row[field])
-                        break
-                    except:
-                        continue
+        for meal_type in meal_order:
+            if meal_type not in food_logs_by_meal or not food_logs_by_meal[meal_type]:
+                continue
             
-            if timestamp is not None:
-                # If timestamp has timezone info, convert to PT
-                # If no timezone info, assume UTC and convert to PT
-                if timestamp.tzinfo is not None:
-                    # Has timezone info, convert to PT
-                    pt_timestamp = timestamp.astimezone(pt_timezone)
-                else:
-                    # No timezone info, assume UTC and convert to PT
-                    utc_timestamp = pytz.utc.localize(timestamp)
-                    pt_timestamp = utc_timestamp.astimezone(pt_timezone)
-                meal_times.append(pt_timestamp)
-        
-        # Format meal header with times
-        if meal_times:
-            time_strs = []
-            # Sort by time value
-            sorted_times = sorted(set(meal_times))
+            food_log_html += f'<div class="meal-section">'
             
-            for pt_timestamp in sorted_times:
-                if language == 'zh':
-                    time_str = pt_timestamp.strftime('%H:%M')  # 24-hour format for Chinese
-                    time_str += ' PT'  # Always show PT since we always convert
-                    time_strs.append(time_str)
-                else:
-                    time_str = pt_timestamp.strftime('%I:%M %p')  # 12-hour format with AM/PM
-                    time_str += ' PT'  # Always show PT since we always convert
-                    time_strs.append(time_str)
+            # Collect all timestamps for this meal
+            # Convert to PT timezone if timezone info is available, otherwise keep as-is
+            meal_times = []
+            pt_timezone = pytz.timezone('America/Los_Angeles')
             
-            if language == 'zh':
-                times_display = f" ({t['logged_at']}: {', '.join(time_strs)})"
-            else:
-                times_display = f" ({t['logged_at']}: {', '.join(time_strs)})"
-        else:
-            times_display = ""
-        
-        food_log_html += f'<h3>{meal_type}{times_display}</h3>'
-        
-        # Collect all images, ingredients, notes, and comments for this meal
-        meal_images = []
-        all_ingredients = []
-        all_notes = []
-        all_comments = []  # Store comments separately
-        
-        for row in food_logs_by_meal[meal_type]:
-            # Collect images - check for ImageURLs first (direct URLs from API)
-            image_urls = row.get("ImageURLs")
-            if image_urls and isinstance(image_urls, list):
-                # Use direct URLs from API - no need to download
-                meal_images.extend(image_urls)
-            else:
-                # Fallback: check ImgName (might be URLs from API or local filenames)
-                img_names_str = str(row.get("ImgName", "") or "").strip()
-                img_items = [x.strip() for x in img_names_str.split(";") if x.strip()] if img_names_str else []
+            for row in food_logs_by_meal[meal_type]:
+                # Try to get timestamp from various fields
+                timestamp = None
+                for field in ["createdAt", "created_at", "uploadedAt", "uploaded_at"]:
+                    if field in row and pd.notna(row[field]):
+                        try:
+                            timestamp = pd.to_datetime(row[field])
+                            break
+                        except:
+                            continue
                 
-                for img_item in img_items:
-                    # Check if it's already a full URL (from API)
-                    if img_item.startswith('http://') or img_item.startswith('https://'):
-                        # Direct URL from API, use it directly
-                        meal_images.append(img_item)
+                if timestamp is not None:
+                    # If timestamp has timezone info, convert to PT
+                    # If no timezone info, assume UTC and convert to PT
+                    if timestamp.tzinfo is not None:
+                        # Has timezone info, convert to PT
+                        pt_timestamp = timestamp.astimezone(pt_timezone)
                     else:
-                        # Local filename - only process if file exists (backward compatibility)
-                        img_path = images_dir / img_item
-                        if img_path.exists():
-                            if use_data_uri:
-                                # Convert to data URI for embedding in HTML
-                                try:
-                                    ext = img_path.suffix.lower()
-                                    mime = {
-                                        ".jpg": "image/jpeg",
-                                        ".jpeg": "image/jpeg",
-                                        ".png": "image/png",
-                                        ".gif": "image/gif",
-                                        ".webp": "image/webp",
-                                    }.get(ext, "image/jpeg")
-                                    data = img_path.read_bytes()
-                                    b64 = base64.b64encode(data).decode("ascii")
-                                    data_uri = f"data:{mime};base64,{b64}"
-                                    meal_images.append(data_uri)
-                                except Exception as e:
-                                    # If conversion fails, fall back to URL
+                        # No timezone info, assume UTC and convert to PT
+                        utc_timestamp = pytz.utc.localize(timestamp)
+                        pt_timestamp = utc_timestamp.astimezone(pt_timezone)
+                    meal_times.append(pt_timestamp)
+            
+            # Format meal header with times
+            if meal_times:
+                time_strs = []
+                # Sort by time value
+                sorted_times = sorted(set(meal_times))
+                
+                for pt_timestamp in sorted_times:
+                    if language == 'zh':
+                        time_str = pt_timestamp.strftime('%H:%M')  # 24-hour format for Chinese
+                        time_str += ' PT'  # Always show PT since we always convert
+                        time_strs.append(time_str)
+                    else:
+                        time_str = pt_timestamp.strftime('%I:%M %p')  # 12-hour format with AM/PM
+                        time_str += ' PT'  # Always show PT since we always convert
+                        time_strs.append(time_str)
+                
+                if language == 'zh':
+                    times_display = f" ({t['logged_at']}: {', '.join(time_strs)})"
+                else:
+                    times_display = f" ({t['logged_at']}: {', '.join(time_strs)})"
+            else:
+                times_display = ""
+            
+            food_log_html += f'<h3>{meal_type}{times_display}</h3>'
+            
+            # Collect all images, ingredients, notes, and comments for this meal
+            meal_images = []
+            all_ingredients = []
+            all_notes = []
+            all_comments = []  # Store comments separately
+            
+            for row in food_logs_by_meal[meal_type]:
+                # Collect images - check for ImageURLs first (direct URLs from API)
+                image_urls = row.get("ImageURLs")
+                if image_urls and isinstance(image_urls, list):
+                    # Use direct URLs from API - no need to download
+                    meal_images.extend(image_urls)
+                else:
+                    # Fallback: check ImgName (might be URLs from API or local filenames)
+                    img_names_str = str(row.get("ImgName", "") or "").strip()
+                    img_items = [x.strip() for x in img_names_str.split(";") if x.strip()] if img_names_str else []
+                    
+                    for img_item in img_items:
+                        # Check if it's already a full URL (from API)
+                        if img_item.startswith('http://') or img_item.startswith('https://'):
+                            # Direct URL from API, use it directly
+                            meal_images.append(img_item)
+                        else:
+                            # Local filename - only process if file exists (backward compatibility)
+                            img_path = images_dir / img_item
+                            if img_path.exists():
+                                if use_data_uri:
+                                    # Convert to data URI for embedding in HTML
+                                    try:
+                                        ext = img_path.suffix.lower()
+                                        mime = {
+                                            ".jpg": "image/jpeg",
+                                            ".jpeg": "image/jpeg",
+                                            ".png": "image/png",
+                                            ".gif": "image/gif",
+                                            ".webp": "image/webp",
+                                        }.get(ext, "image/jpeg")
+                                        data = img_path.read_bytes()
+                                        b64 = base64.b64encode(data).decode("ascii")
+                                        data_uri = f"data:{mime};base64,{b64}"
+                                        meal_images.append(data_uri)
+                                    except Exception as e:
+                                        # If conversion fails, fall back to URL
+                                        if image_base_url:
+                                            meal_images.append(f"{image_base_url}/{img_item}")
+                                        else:
+                                            relative_path = f"{images_dir.name}/{img_item}"
+                                            meal_images.append(relative_path)
+                                else:
+                                    # Use URL path
                                     if image_base_url:
                                         meal_images.append(f"{image_base_url}/{img_item}")
                                     else:
                                         relative_path = f"{images_dir.name}/{img_item}"
                                         meal_images.append(relative_path)
-                            else:
-                                # Use URL path
-                                if image_base_url:
-                                    meal_images.append(f"{image_base_url}/{img_item}")
-                                else:
-                                    relative_path = f"{images_dir.name}/{img_item}"
-                                    meal_images.append(relative_path)
-            
-            # Collect ingredients
-            ingredients_data = row.get("Ingredients") or row.get("ingredients")
-            ingredients_summary = extract_ingredients_summary(ingredients_data)
-            all_ingredients.extend(ingredients_summary["main_ingredients"])
-            
-            # Collect notes (description) - check multiple field names
-            # 收集备注（描述）- 检查多个字段名
-            description = (row.get("Description") or row.get("description") or 
-                          row.get("note") or row.get("Note") or "")
-            if description and pd.notna(description):
-                description_str = str(description).strip()
-                if description_str and description_str.lower() != "nan":
-                    all_notes.append(description_str)
-            
-            # Collect RD/dietitian comments - check multiple possible field names
-            # 收集营养师评论 - 检查多个可能的字段名
-            comments_data = (row.get("comments") or row.get("Comments") or 
-                           row.get("RD Comments") or row.get("rd_comments") or
-                           row.get("rdComments") or row.get("comment"))
-            if comments_data and pd.notna(comments_data):
-                # Check if it's a string that needs parsing, or already a dict/list
-                if isinstance(comments_data, str):
-                    comments_str = comments_data.strip()
-                    if comments_str and comments_str.lower() != "nan":
+                
+                # Collect ingredients
+                ingredients_data = row.get("Ingredients") or row.get("ingredients")
+                ingredients_summary = extract_ingredients_summary(ingredients_data)
+                all_ingredients.extend(ingredients_summary["main_ingredients"])
+                
+                # Collect notes (description) - check multiple field names
+                # 收集备注（描述）- 检查多个字段名
+                description = (row.get("Description") or row.get("description") or 
+                              row.get("note") or row.get("Note") or "")
+                if description and pd.notna(description):
+                    description_str = str(description).strip()
+                    if description_str and description_str.lower() != "nan":
+                        all_notes.append(description_str)
+                
+                # Collect RD/dietitian comments - check multiple possible field names
+                # 收集营养师评论 - 检查多个可能的字段名
+                comments_data = (row.get("comments") or row.get("Comments") or 
+                               row.get("RD Comments") or row.get("rd_comments") or
+                               row.get("rdComments") or row.get("comment"))
+                if comments_data and pd.notna(comments_data):
+                    # Check if it's a string that needs parsing, or already a dict/list
+                    if isinstance(comments_data, str):
+                        comments_str = comments_data.strip()
+                        if comments_str and comments_str.lower() != "nan":
+                            formatted_comments = format_rd_comments(comments_data, language)
+                            all_comments.extend(formatted_comments)
+                    else:
+                        # Already a dict or list
                         formatted_comments = format_rd_comments(comments_data, language)
                         all_comments.extend(formatted_comments)
-                else:
-                    # Already a dict or list
-                    formatted_comments = format_rd_comments(comments_data, language)
-                    all_comments.extend(formatted_comments)
-        
-        # Display images
-        if meal_images:
-            food_log_html += '<div class="meal-images">'
-            for img_url in meal_images:
-                # img_url can be either a direct HTTP URL or a data URI
-                food_log_html += f'<img src="{html.escape(img_url)}" alt="Food image" loading="lazy" />'
-            food_log_html += '</div>'
-        
-        # Display ingredients
-        if all_ingredients:
-            food_log_html += '<div class="main-ingredients">'
-            food_log_html += f'<div class="ingredients-label">{t["main_ingredients"]}:</div>'
-            food_log_html += '<ul class="ingredients-list">'
-            for ing in all_ingredients:
-                name = html.escape(str(ing.get("name", "")))
-                quantity = html.escape(str(ing.get("quantity", "")))
-                if name:
-                    food_log_html += f'<li>{name}'
-                    if quantity:
-                        food_log_html += f' {quantity}'
-                    food_log_html += '</li>'
-            food_log_html += '</ul>'
-            food_log_html += '</div>'
-        
-        # Display notes (patient's description)
-        if all_notes:
-            notes_label = "病人备注" if language == 'zh' else "Patient Notes"
-            food_log_html += '<div class="meal-notes">'
-            food_log_html += f'<div class="notes-label"><strong>{notes_label}:</strong></div>'
-            for note in all_notes:
-                food_log_html += f'<p>{html.escape(note).replace(chr(10), "<br/>")}</p>'
-            food_log_html += '</div>'
-        
-        # Display dietitian/RD comments
-        if all_comments:
-            comments_label = "营养师评论" if language == 'zh' else "Dietitian Comments"
-            food_log_html += '<div class="meal-comments">'
-            food_log_html += f'<div class="comments-label"><strong>{comments_label}:</strong></div>'
-            for comment in all_comments:
-                comment_html = '<div class="comment-item">'
-                text = html.escape(comment.get("text", ""))
-                if text:
-                    comment_html += f'<div class="comment-text">{text}</div>'
-                
-                # Show commented by info if available
-                commented_by = comment.get("commentedBy")
-                if isinstance(commented_by, dict):
-                    name = commented_by.get("firstName") or commented_by.get("name") or ""
+            
+            # Display images
+            if meal_images:
+                food_log_html += '<div class="meal-images">'
+                for img_url in meal_images:
+                    # img_url can be either a direct HTTP URL or a data URI
+                    food_log_html += f'<img src="{html.escape(img_url)}" alt="Food image" loading="lazy" />'
+                food_log_html += '</div>'
+            
+            # Display ingredients
+            if all_ingredients:
+                food_log_html += '<div class="main-ingredients">'
+                food_log_html += f'<div class="ingredients-label">{t["main_ingredients"]}:</div>'
+                food_log_html += '<ul class="ingredients-list">'
+                for ing in all_ingredients:
+                    name = html.escape(str(ing.get("name", "")))
+                    quantity = html.escape(str(ing.get("quantity", "")))
                     if name:
-                        if commented_by.get("lastName"):
-                            name += f" {commented_by.get('lastName')}"
-                        commenter_title = commented_by.get("title") or ""
-                        if commenter_title:
-                            name += f" ({commenter_title})"
-                        comment_html += f'<div class="comment-by">— {html.escape(name)}</div>'
-                elif isinstance(commented_by, str) and commented_by:
-                    comment_html += f'<div class="comment-by">— {html.escape(commented_by)}</div>'
-                
-                # Show comment time if available (convert to PT timezone)
-                commented_at = comment.get("commentedAt")
-                if commented_at:
-                    try:
-                        # Try to parse and format the date, convert to PT timezone
-                        dt = pd.to_datetime(commented_at)
-                        # Convert to PT timezone
-                        pt_timezone = pytz.timezone('America/Los_Angeles')
-                        if dt.tzinfo is not None:
-                            # Has timezone info, convert to PT
-                            dt_pt = dt.astimezone(pt_timezone)
-                        else:
-                            # No timezone info, assume UTC and convert to PT
-                            dt_utc = pytz.utc.localize(dt.to_pydatetime())
-                            dt_pt = dt_utc.astimezone(pt_timezone)
-                        
-                        if language == 'zh':
-                            time_str = dt_pt.strftime('%Y-%m-%d %H:%M PT')
-                        else:
-                            time_str = dt_pt.strftime('%Y-%m-%d %I:%M %p PT')
-                        comment_html += f'<div class="comment-time">{time_str}</div>'
-                    except:
-                        comment_html += f'<div class="comment-time">{html.escape(str(commented_at))}</div>'
-                
-                comment_html += '</div>'
-                food_log_html += comment_html
-            food_log_html += '</div>'
-        
-        food_log_html += '</div>'  # meal-section
+                        food_log_html += f'<li>{name}'
+                        if quantity:
+                            food_log_html += f' {quantity}'
+                        food_log_html += '</li>'
+                food_log_html += '</ul>'
+                food_log_html += '</div>'
+            
+            # Display notes (patient's description)
+            if all_notes:
+                notes_label = "病人备注" if language == 'zh' else "Patient Notes"
+                food_log_html += '<div class="meal-notes">'
+                food_log_html += f'<div class="notes-label"><strong>{notes_label}:</strong></div>'
+                for note in all_notes:
+                    food_log_html += f'<p>{html.escape(note).replace(chr(10), "<br/>")}</p>'
+                food_log_html += '</div>'
+            
+            # Display dietitian/RD comments
+            if all_comments:
+                comments_label = "营养师评论" if language == 'zh' else "Dietitian Comments"
+                food_log_html += '<div class="meal-comments">'
+                food_log_html += f'<div class="comments-label"><strong>{comments_label}:</strong></div>'
+                for comment in all_comments:
+                    comment_html = '<div class="comment-item">'
+                    text = html.escape(comment.get("text", ""))
+                    if text:
+                        comment_html += f'<div class="comment-text">{text}</div>'
+                    
+                    # Show commented by info if available
+                    commented_by = comment.get("commentedBy")
+                    if isinstance(commented_by, dict):
+                        name = commented_by.get("firstName") or commented_by.get("name") or ""
+                        if name:
+                            if commented_by.get("lastName"):
+                                name += f" {commented_by.get('lastName')}"
+                            commenter_title = commented_by.get("title") or ""
+                            if commenter_title:
+                                name += f" ({commenter_title})"
+                            comment_html += f'<div class="comment-by">— {html.escape(name)}</div>'
+                    elif isinstance(commented_by, str) and commented_by:
+                        comment_html += f'<div class="comment-by">— {html.escape(commented_by)}</div>'
+                    
+                    # Show comment time if available (convert to PT timezone)
+                    commented_at = comment.get("commentedAt")
+                    if commented_at:
+                        try:
+                            # Try to parse and format the date, convert to PT timezone
+                            dt = pd.to_datetime(commented_at)
+                            # Convert to PT timezone
+                            pt_timezone = pytz.timezone('America/Los_Angeles')
+                            if dt.tzinfo is not None:
+                                # Has timezone info, convert to PT
+                                dt_pt = dt.astimezone(pt_timezone)
+                            else:
+                                # No timezone info, assume UTC and convert to PT
+                                dt_utc = pytz.utc.localize(dt.to_pydatetime())
+                                dt_pt = dt_utc.astimezone(pt_timezone)
+                            
+                            if language == 'zh':
+                                time_str = dt_pt.strftime('%Y-%m-%d %H:%M PT')
+                            else:
+                                time_str = dt_pt.strftime('%Y-%m-%d %I:%M %p PT')
+                            comment_html += f'<div class="comment-time">{time_str}</div>'
+                        except:
+                            comment_html += f'<div class="comment-time">{html.escape(str(commented_at))}</div>'
+                    
+                    comment_html += '</div>'
+                    food_log_html += comment_html
+                food_log_html += '</div>'
+            
+            food_log_html += '</div>'  # meal-section
     
     food_log_html += '</div>'  # food-log-summary
     
