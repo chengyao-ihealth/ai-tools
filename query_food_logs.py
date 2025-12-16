@@ -596,20 +596,15 @@ def main():
                     date_col = col
                     break
             
-            print(f"\n[INFO] Summary / 摘要:")
-            print(f"  - Valid food logs / 有效食物记录数: {len(df)}")
-            print(f"  - Patients with food logs / 有食物记录的病人数: {unique_patients_in_query}")
-            print(f"  - Total valid food logs / 总有效食物记录数: {total_valid_food_logs}")
-            print(f"  - Total enrolled patients / 总注册病人数: {total_enrolled_patients}")
-            if date_col:
-                print(f"  - Date range / 日期范围: {df[date_col].min()} to {df[date_col].max()}")
+            # Calculate number of days and statistics for summary
+            # 计算天数和统计信息用于摘要
+            num_days = 1
+            patients_avg_gt_1 = 0
+            patients_logging_every_day = 0
             
-            # Calculate top 10 patients by food log count
-            # 计算food log最多的前10个病人
             if patient_col:
                 # Calculate number of days in the date range
                 # 计算日期范围内的天数
-                num_days = 1
                 if args.days:
                     # If --days parameter was used, use it directly
                     # 如果使用了--days参数，直接使用它
@@ -649,6 +644,58 @@ def main():
                 # 按病人分组并统计log数
                 patient_log_counts = df.groupby(patient_col).size().reset_index(name='total_logs')
                 patient_log_counts = patient_log_counts.sort_values('total_logs', ascending=False)
+                
+                # Calculate statistics: patients with avg logs > 1 and patients logging every day
+                # 计算统计：平均log数>1的病人数和每天都log的病人数
+                if num_days > 0 and date_col:
+                    # Calculate average logs per day for each patient
+                    # 计算每个病人每天的平均log数
+                    patient_log_counts['avg_logs_per_day'] = patient_log_counts['total_logs'] / num_days
+                    
+                    # Count patients with average logs > 1
+                    # 统计平均log数>1的病人数
+                    patients_avg_gt_1 = len(patient_log_counts[patient_log_counts['avg_logs_per_day'] > 1])
+                    
+                    # Count patients who log every day
+                    # 统计每天都log的病人数（在日期范围内每天都有至少一个log）
+                    try:
+                        # Convert date column to datetime and extract date part
+                        # 将日期列转换为datetime并提取日期部分
+                        df_with_dates = df.copy()
+                        df_with_dates['log_date'] = pd.to_datetime(df_with_dates[date_col], errors='coerce').dt.date
+                        
+                        # For each patient, count unique dates with logs
+                        # 对每个病人，统计有log的唯一日期数
+                        patient_unique_dates = df_with_dates.groupby(patient_col)['log_date'].nunique().reset_index(name='unique_dates')
+                        
+                        # Merge with patient_log_counts
+                        # 与patient_log_counts合并
+                        patient_stats = patient_log_counts.merge(patient_unique_dates, on=patient_col, how='left')
+                        patient_stats['unique_dates'] = patient_stats['unique_dates'].fillna(0)
+                        
+                        # Patients who log every day: unique_dates >= num_days
+                        # 每天都log的病人：唯一日期数 >= 天数
+                        patients_logging_every_day = len(patient_stats[patient_stats['unique_dates'] >= num_days])
+                    except Exception as e:
+                        # Fallback: use total_logs >= num_days as approximation
+                        # 回退：使用总log数 >= 天数作为近似
+                        patients_logging_every_day = len(patient_log_counts[patient_log_counts['total_logs'] >= num_days])
+                        print(f"[WARN] Failed to calculate exact daily logging count, using approximation / 计算精确每日log数失败，使用近似值: {e}")
+            
+            print(f"\n[INFO] Summary / 摘要:")
+            print(f"  - Valid food logs / 有效食物记录数: {len(df)}")
+            print(f"  - Patients with food logs / 有食物记录的病人数: {unique_patients_in_query}")
+            print(f"  - Total valid food logs / 总有效食物记录数: {total_valid_food_logs}")
+            print(f"  - Total enrolled patients / 总注册病人数: {total_enrolled_patients}")
+            if date_col:
+                print(f"  - Date range / 日期范围: {df[date_col].min()} to {df[date_col].max()}")
+            if patient_col and num_days > 0:
+                print(f"  - Patients with avg logs > 1 / 平均log数>1的病人数: {patients_avg_gt_1}")
+                print(f"  - Patients logging every day / 每天都log的病人数: {patients_logging_every_day}")
+            
+            # Calculate top 10 patients by food log count
+            # 计算food log最多的前10个病人
+            if patient_col:
                 
                 # Get top 10 patients
                 # 获取前10个病人

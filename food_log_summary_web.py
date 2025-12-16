@@ -541,11 +541,17 @@ HTML_TEMPLATE = """
                                     let html = '';
                                     topDays.forEach(day => {
                                         // Date is already in PT timezone from backend (YYYY-MM-DD format)
+                                        // Format it directly without timezone conversion to preserve PT date
                                         let dateStr = day.date;
                                         try {
                                             const [year, month, dayNum] = day.date.split('-');
-                                            const dateObj = new Date(year, parseInt(month) - 1, dayNum);
-                                            dateStr = dateObj.toLocaleDateString(locale, { timeZone: 'America/Los_Angeles' });
+                                            // Format as MM/DD/YYYY (US format) or YYYY-MM-DD (other locales)
+                                            // Since date is already in PT, just format the string directly
+                                            if (locale === 'zh-CN' || locale.startsWith('zh')) {
+                                                dateStr = `${year}-${month}-${dayNum}`;
+                                            } else {
+                                                dateStr = `${month}/${dayNum}/${year}`;
+                                            }
                                         } catch (e) {
                                             // Keep original date string if parsing fails
                                         }
@@ -660,8 +666,21 @@ HTML_TEMPLATE = """
                                 if (topDays && topDays.length > 0) {
                                     let html = '';
                                     topDays.forEach(day => {
-                                        const dateObj = new Date(day.date);
-                                        const dateStr = dateObj.toLocaleDateString(locale);
+                                        // Date is already in PT timezone from backend (YYYY-MM-DD format)
+                                        // Format it directly without timezone conversion to preserve PT date
+                                        let dateStr = day.date;
+                                        try {
+                                            const [year, month, dayNum] = day.date.split('-');
+                                            // Format as MM/DD/YYYY (US format) or YYYY-MM-DD (other locales)
+                                            // Since date is already in PT, just format the string directly
+                                            if (locale === 'zh-CN' || locale.startsWith('zh')) {
+                                                dateStr = `${year}-${month}-${dayNum}`;
+                                            } else {
+                                                dateStr = `${month}/${dayNum}/${year}`;
+                                            }
+                                        } catch (e) {
+                                            // Keep original date string if parsing fails
+                                        }
                                         html += `<div style="margin: 3px 0;">${dateStr} - ${day.count} ${t.records}</div>`;
                                     });
                                     topDaysList.innerHTML = html;
