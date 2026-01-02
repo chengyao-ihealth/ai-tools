@@ -35,7 +35,8 @@ from generate_food_log_summary import (
     get_patient_info,
     get_food_log_image_urls,
     group_food_logs_by_meal,
-    generate_html_summary
+    generate_html_summary,
+    analyze_food_image_with_openai
 )
 
 # Load environment variables
@@ -48,6 +49,7 @@ CORS(app)  # Enable CORS for API endpoints
 DATABASE_NAME = os.getenv("DATABASE_NAME", "UnifiedCare")
 MONGO_URI = os.getenv("MONGO_DATABASE_URI")
 SESSION_TOKEN = os.getenv("SESSION_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 IMAGES_DIR = Path("./images")
 IMAGES_DIR.mkdir(exist_ok=True, parents=True)
 
@@ -1106,6 +1108,53 @@ def api_generate_summary():
                 if debug:
                     print(f"[DEBUG] After image download - ImgName column: {food_logs_df['ImgName'].tolist() if 'ImgName' in food_logs_df.columns else 'Not found'}")
                 
+                # Generate AI meal summaries for images using OpenAI
+                # 使用 OpenAI 为图片生成 AI meal summaries
+                meal_summaries = {}  # Dict mapping image_url -> summary
+                if OPENAI_API_KEY and has_food_logs:
+                    print("[INFO] Generating AI meal summaries for food log images... / 正在为食物日志图片生成AI meal summaries...")
+                    for _, row in food_logs_df.iterrows():
+                        # Get image URLs
+                        image_urls = row.get("ImageURLs")
+                        if not image_urls or not isinstance(image_urls, list):
+                            # Fallback to ImgName
+                            img_names_str = str(row.get("ImgName", "") or "").strip()
+                            if img_names_str:
+                                image_urls = [url.strip() for url in img_names_str.split(";") if url.strip() and (url.startswith('http://') or url.startswith('https://'))]
+                        
+                        # Extract patient notes from this food log entry (Description field)
+                        # 从这条 food log 记录中提取病人备注（Description 字段）
+                        patient_notes_text = None
+                        if 'Description' in row and pd.notna(row['Description']):
+                            patient_notes_text = str(row['Description']).strip()
+                        elif 'note' in row and pd.notna(row['note']):
+                            patient_notes_text = str(row['note']).strip()
+                        elif 'description' in row and pd.notna(row['description']):
+                            patient_notes_text = str(row['description']).strip()
+                        
+                        if image_urls:
+                            # Analyze first image (or all images if needed)
+                            # 分析第一张图片（或根据需要分析所有图片）
+                            for img_url in image_urls[:1]:  # Analyze first image only for now
+                                if img_url not in meal_summaries:  # Avoid duplicate analysis
+                                    if debug:
+                                        print(f"[DEBUG] Analyzing image: {img_url[:100]}...")
+                                        if patient_notes_text:
+                                            print(f"[DEBUG] Patient notes for this image: {patient_notes_text[:100]}...")
+                                    summary = analyze_food_image_with_openai(
+                                        img_url,
+                                        openai_api_key=OPENAI_API_KEY,
+                                        patient_notes=patient_notes_text,
+                                        debug=debug
+                                    )
+                                    if summary:
+                                        meal_summaries[img_url] = summary
+                                        if debug:
+                                            print(f"[DEBUG] Generated summary for image: {summary.get('ai_title', 'N/A')}")
+                    print(f"[INFO] Generated {len(meal_summaries)} AI meal summaries / 生成了 {len(meal_summaries)} 个AI meal summaries")
+                elif not OPENAI_API_KEY and has_food_logs:
+                    print("[WARN] OPENAI_API_KEY not found in .env, skipping AI meal summary generation / 未找到OPENAI_API_KEY，跳过AI meal summary生成")
+                
                 # Group by meal type
                 food_logs_by_meal = group_food_logs_by_meal(food_logs_df, language=language)
             else:
@@ -1118,6 +1167,7 @@ def api_generate_summary():
                     "snack": [],
                     "other": []
                 }
+                meal_summaries = {}  # Empty meal summaries when no food logs
             
             # Prepare debug info if requested
             debug_info = {}
@@ -1171,7 +1221,8 @@ def api_generate_summary():
                 use_data_uri=True,  # Use data URI for iframe compatibility
                 image_base_url=None,
                 language=language,
-                care_notes=care_notes  # Pass care notes to include in Patient Information section
+                care_notes=care_notes,  # Pass care notes to include in Patient Information section
+                meal_summaries=meal_summaries  # Pass meal summaries for display
             )
             
             client.close()

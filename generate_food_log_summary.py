@@ -24,6 +24,13 @@ import httpx
 from httpx import HTTPStatusError
 
 try:
+    from openai import OpenAI
+except ImportError:
+    OpenAI = None
+    print("[WARN] OpenAI package not installed. Meal summary analysis will be disabled.", file=sys.stderr)
+    print("[WARN] Install with: pip install openai", file=sys.stderr)
+
+try:
     from pymongo import MongoClient
     from pymongo.errors import ConnectionFailure, ConfigurationError
     from bson import ObjectId
@@ -799,6 +806,224 @@ def parse_meal_type(row: pd.Series, language: str = 'zh') -> str:
     return t['other']
 
 
+def analyze_food_image_with_openai(
+    image_url: str,
+    openai_api_key: Optional[str] = None,
+    prompt_file: Optional[Path] = None,
+    patient_notes: Optional[str] = None,
+    debug: bool = False
+) -> Optional[Dict[str, Any]]:
+    """
+    Analyze food image using OpenAI Vision API to generate meal summary.
+    使用 OpenAI Vision API 分析食物图片生成 meal summary。
+    
+    Args:
+        image_url: URL of the food image / 食物图片的URL
+        openai_api_key: OpenAI API key (if None, will try to get from env) / OpenAI API key
+        prompt_file: Path to prompt file (default: food_image_meal_summary_prompt.txt) / prompt文件路径
+        patient_notes: Patient notes content to include in analysis (optional) / 包含在分析中的病人备注内容（可选）
+        debug: Enable debug mode / 启用调试模式
+        
+    Returns:
+        Dict with parsed meal summary or None if failed / 解析后的meal summary字典或None
+    """
+    if OpenAI is None:
+        if debug:
+            print("[DEBUG] OpenAI package not available, skipping image analysis")
+        return None
+    
+    # Get API key from parameter or environment
+    # 从参数或环境变量获取API key
+    api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        if debug:
+            print("[DEBUG] OPENAI_API_KEY not found, skipping image analysis")
+        return None
+    
+    # Load prompt from file
+    # 从文件加载prompt
+    if prompt_file is None:
+        prompt_file = Path(__file__).parent / "food_image_meal_summary_prompt.txt"
+    
+    try:
+        prompt_text = prompt_file.read_text(encoding="utf-8")
+    except Exception as e:
+        if debug:
+            print(f"[DEBUG] Failed to read prompt file: {e}")
+        return None
+    
+    # Append patient notes to prompt if available
+    # 如果有病人备注，将其添加到 prompt 中
+    if patient_notes and patient_notes.strip():
+        patient_notes_section = f"\n\nPATIENT NOTES:\n{patient_notes.strip()}\n\nPlease consider the patient notes above when analyzing the meal image. The notes may contain relevant dietary restrictions, preferences, health conditions, or other context that should inform your analysis."
+        prompt_text = prompt_text + patient_notes_section
+        if debug:
+            print(f"[DEBUG] Added patient notes to prompt ({len(patient_notes)} characters)")
+    
+    try:
+        client = OpenAI(api_key=api_key)
+        
+        if debug:
+            print(f"[DEBUG] Analyzing image with OpenAI: {image_url[:100]}...")
+        
+        # Call OpenAI Vision API
+        # 调用 OpenAI Vision API
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt_text},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": image_url}
+                        }
+                    ]
+                }
+            ],
+            max_tokens=1000,
+            temperature=0.3
+        )
+        
+        # Parse response
+        # 解析响应
+        content = response.choices[0].message.content
+        if debug:
+            print(f"[DEBUG] OpenAI response received: {len(content)} characters")
+        
+        # Parse the structured response
+        # 解析结构化响应
+        summary = parse_meal_summary_response(content)
+        
+        if debug:
+            print(f"[DEBUG] Parsed meal summary: {summary.get('ai_title', 'N/A')}")
+        
+        return summary
+        
+    except Exception as e:
+        if debug:
+            print(f"[DEBUG] OpenAI API call failed: {e}")
+            import traceback
+            traceback.print_exc()
+        return None
+
+
+def parse_meal_summary_response(response_text: str) -> Dict[str, Any]:
+    """
+    Parse OpenAI response text into structured meal summary.
+    解析 OpenAI 响应文本为结构化的 meal summary。
+    
+    Args:
+        response_text: Raw response text from OpenAI / OpenAI 原始响应文本
+        
+    Returns:
+        Dict with parsed fields / 解析后的字段字典
+    """
+    summary = {
+        "ai_title": "",
+        "detected_foods": [],
+        "composition": {"carb": None, "protein": None, "veg": None, "fat": None},
+        "observations": [],
+        "dietary_consideration": ""
+    }
+    
+    try:
+        lines = response_text.strip().split('\n')
+        current_section = None
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # Parse AI title
+            # 解析 AI title
+            if line.startswith("AI title:"):
+                summary["ai_title"] = line.replace("AI title:", "").strip()
+                continue
+            
+            # Parse detected foods
+            # 解析检测到的食物
+            if line.startswith("Detected foods:"):
+                current_section = "foods"
+                continue
+            elif current_section == "foods" and line.startswith("-"):
+                food = line.replace("-", "").strip()
+                if food:
+                    summary["detected_foods"].append(food)
+                continue
+            
+            # Parse composition
+            # 解析成分
+            if line.startswith("Composition estimate"):
+                current_section = "composition"
+                continue
+            elif current_section == "composition":
+                if "carb:" in line.lower():
+                    try:
+                        val = float(line.split(":")[-1].strip())
+                        summary["composition"]["carb"] = val
+                    except:
+                        pass
+                elif "protein:" in line.lower():
+                    try:
+                        val = float(line.split(":")[-1].strip())
+                        summary["composition"]["protein"] = val
+                    except:
+                        pass
+                elif "veg:" in line.lower():
+                    try:
+                        val = float(line.split(":")[-1].strip())
+                        summary["composition"]["veg"] = val
+                    except:
+                        pass
+                elif "fat:" in line.lower():
+                    try:
+                        val = float(line.split(":")[-1].strip())
+                        summary["composition"]["fat"] = val
+                    except:
+                        pass
+                continue
+            
+            # Parse observations
+            # 解析观察
+            if line.startswith("Observations:"):
+                current_section = "observations"
+                continue
+            elif current_section == "observations" and line.startswith("-"):
+                obs_line = line.replace("-", "").strip()
+                # Parse observation with confidence
+                # 解析带置信度的观察
+                if "(" in obs_line and "confidence:" in obs_line.lower():
+                    parts = obs_line.split("(")
+                    keyword = parts[0].strip()
+                    try:
+                        conf_part = parts[1].split(":")[-1].replace(")", "").strip()
+                        confidence = float(conf_part)
+                    except:
+                        confidence = 1.0
+                    summary["observations"].append({"keyword": keyword, "confidence": confidence})
+                else:
+                    summary["observations"].append({"keyword": obs_line, "confidence": 1.0})
+                continue
+            
+            # Parse dietary consideration
+            # 解析饮食考虑
+            if line.startswith("Dietary consideration:"):
+                summary["dietary_consideration"] = line.replace("Dietary consideration:", "").strip()
+                current_section = None
+                continue
+    
+    except Exception as e:
+        # If parsing fails, store raw text
+        # 如果解析失败，存储原始文本
+        summary["raw_response"] = response_text
+        summary["parse_error"] = str(e)
+    
+    return summary
+
+
 def format_rd_comments(comments_data, language: str = 'zh') -> List[Dict[str, Any]]:
     """
     Format RD/dietitian comments from food log data.
@@ -944,12 +1169,18 @@ def generate_html_summary(
     use_data_uri: bool = True,
     image_base_url: Optional[str] = None,
     language: str = 'zh',
-    care_notes: Optional[List[Dict[str, Any]]] = None
+    care_notes: Optional[List[Dict[str, Any]]] = None,
+    meal_summaries: Optional[Dict[str, Dict[str, Any]]] = None
 ) -> str:
     """
     Generate HTML summary similar to the attached image format.
     生成类似附图的HTML总结。
     """
+    
+    # Initialize meal_summaries if None
+    # 如果 meal_summaries 为 None，初始化为空字典
+    if meal_summaries is None:
+        meal_summaries = {}
     
     # Translations
     labels = {
@@ -1302,11 +1533,12 @@ def generate_html_summary(
             
             food_log_html += f'<h3>{meal_type}{times_display}</h3>'
             
-            # Collect all images, ingredients, notes, and comments for this meal
+            # Collect all images, ingredients, notes, comments, and meal summaries for this meal
             meal_images = []
             all_ingredients = []
             all_notes = []
             all_comments = []  # Store comments separately
+            meal_summaries_list = []  # Store meal summaries for this meal
             
             for row in food_logs_by_meal[meal_type]:
                 # Collect images - check for ImageURLs first (direct URLs from API)
@@ -1314,6 +1546,12 @@ def generate_html_summary(
                 if image_urls and isinstance(image_urls, list):
                     # Use direct URLs from API - no need to download
                     meal_images.extend(image_urls)
+                    # Collect meal summaries for these images
+                    # 为这些图片收集 meal summaries
+                    if meal_summaries:
+                        for img_url in image_urls:
+                            if img_url in meal_summaries:
+                                meal_summaries_list.append(meal_summaries[img_url])
                 else:
                     # Fallback: check ImgName (might be URLs from API or local filenames)
                     img_names_str = str(row.get("ImgName", "") or "").strip()
@@ -1324,6 +1562,10 @@ def generate_html_summary(
                         if img_item.startswith('http://') or img_item.startswith('https://'):
                             # Direct URL from API, use it directly
                             meal_images.append(img_item)
+                            # Collect meal summary if available
+                            # 如果可用，收集 meal summary
+                            if meal_summaries and img_item in meal_summaries:
+                                meal_summaries_list.append(meal_summaries[img_item])
                         else:
                             # Local filename - only process if file exists (backward compatibility)
                             img_path = images_dir / img_item
@@ -1473,6 +1715,70 @@ def generate_html_summary(
                     
                     comment_html += '</div>'
                     food_log_html += comment_html
+                food_log_html += '</div>'
+            
+            # Display AI meal summaries (after RD comments)
+            # 显示 AI meal summaries（在 RD comments 之后）
+            if meal_summaries_list:
+                summary_label = "AI 餐食分析" if language == 'zh' else "AI Meal Analysis"
+                food_log_html += '<div class="meal-ai-summary">'
+                food_log_html += f'<div class="ai-summary-label"><strong>{summary_label}:</strong></div>'
+                
+                for summary in meal_summaries_list:
+                    summary_html = '<div class="ai-summary-item">'
+                    
+                    # AI Title
+                    if summary.get("ai_title"):
+                        summary_html += f'<div class="ai-title"><strong>{html.escape(summary["ai_title"])}</strong></div>'
+                    
+                    # Detected foods
+                    if summary.get("detected_foods"):
+                        foods_label = "检测到的食物" if language == 'zh' else "Detected Foods"
+                        summary_html += f'<div class="ai-section"><strong>{foods_label}:</strong> '
+                        foods_list = [html.escape(str(food)) for food in summary["detected_foods"]]
+                        summary_html += ', '.join(foods_list)
+                        summary_html += '</div>'
+                    
+                    # Composition
+                    comp = summary.get("composition", {})
+                    if any(comp.values()):
+                        comp_label = "成分估计" if language == 'zh' else "Composition Estimate"
+                        summary_html += f'<div class="ai-section"><strong>{comp_label}:</strong> '
+                        comp_parts = []
+                        if comp.get("carb") is not None:
+                            comp_parts.append(f"碳水: {comp['carb']:.2f}" if language == 'zh' else f"Carbs: {comp['carb']:.2f}")
+                        if comp.get("protein") is not None:
+                            comp_parts.append(f"蛋白质: {comp['protein']:.2f}" if language == 'zh' else f"Protein: {comp['protein']:.2f}")
+                        if comp.get("veg") is not None:
+                            comp_parts.append(f"蔬菜: {comp['veg']:.2f}" if language == 'zh' else f"Vegetables: {comp['veg']:.2f}")
+                        if comp.get("fat") is not None:
+                            comp_parts.append(f"脂肪: {comp['fat']:.2f}" if language == 'zh' else f"Fat: {comp['fat']:.2f}")
+                        summary_html += ', '.join(comp_parts)
+                        summary_html += '</div>'
+                    
+                    # Observations
+                    if summary.get("observations"):
+                        obs_label = "观察" if language == 'zh' else "Observations"
+                        summary_html += f'<div class="ai-section"><strong>{obs_label}:</strong> '
+                        obs_list = []
+                        for obs in summary["observations"]:
+                            keyword = html.escape(str(obs.get("keyword", "")))
+                            conf = obs.get("confidence", 1.0)
+                            if conf < 1.0:
+                                obs_list.append(f"{keyword} ({conf:.2f})")
+                            else:
+                                obs_list.append(keyword)
+                        summary_html += ', '.join(obs_list)
+                        summary_html += '</div>'
+                    
+                    # Dietary consideration
+                    if summary.get("dietary_consideration"):
+                        consider_label = "饮食考虑" if language == 'zh' else "Dietary Consideration"
+                        summary_html += f'<div class="ai-section"><strong>{consider_label}:</strong> {html.escape(str(summary["dietary_consideration"]))}</div>'
+                    
+                    summary_html += '</div>'
+                    food_log_html += summary_html
+                
                 food_log_html += '</div>'
             
             food_log_html += '</div>'  # meal-section
@@ -1691,6 +1997,44 @@ body {{
   font-size: 11px;
   color: #999;
   margin-top: 4px;
+}}
+.meal-ai-summary {{
+  margin-top: 15px;
+  padding: 15px;
+  background: #f0f9ff;
+  border-left: 4px solid #3b82f6;
+  border-radius: 8px;
+}}
+.ai-summary-label {{
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: #1e40af;
+  font-size: 15px;
+}}
+.ai-summary-item {{
+  margin-bottom: 15px;
+  padding: 12px;
+  background: white;
+  border-radius: 6px;
+  border: 1px solid #dbeafe;
+}}
+.ai-summary-item:last-child {{
+  margin-bottom: 0;
+}}
+.ai-title {{
+  font-size: 15px;
+  color: #1e40af;
+  margin-bottom: 10px;
+  font-weight: 600;
+}}
+.ai-section {{
+  font-size: 13px;
+  color: #333;
+  line-height: 1.6;
+  margin-bottom: 8px;
+}}
+.ai-section:last-child {{
+  margin-bottom: 0;
 }}
 @media (max-width: 1024px) {{
   .content {{
