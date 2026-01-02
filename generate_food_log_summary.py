@@ -49,6 +49,12 @@ except ImportError:
     print("[ERROR] Could not import from query_food_logs. Make sure query_food_logs.py is in the same directory.", file=sys.stderr)
     sys.exit(1)
 
+try:
+    from cache_db import CacheDB
+except ImportError:
+    CacheDB = None
+    print("[WARN] CacheDB not available. Caching will be disabled.", file=sys.stderr)
+
 # API base URL from environment variable
 UC_BACKEND_API_BASE_URL = os.getenv("UC_BACKEND_API_BASE_URL", "https://uc-prod.ihealth-eng.com/v1/uc")
 API_BASE = f"{UC_BACKEND_API_BASE_URL}/food-log"
@@ -718,6 +724,117 @@ def get_food_log_image_urls(
     return food_logs_df, api_responses
 
 
+def download_image_with_cache(
+    image_url: str,
+    images_dir: Path,
+    food_log_id: Optional[str] = None,
+    image_index: Optional[int] = None,
+    cache_db: Optional[CacheDB] = None,
+    debug: bool = False
+) -> Optional[Path]:
+    """
+    Download image with caching support.
+    下载图片并支持缓存。
+    
+    Args:
+        image_url: Image URL / 图片URL
+        images_dir: Directory to save images / 保存图片的目录
+        food_log_id: Food log ID for naming (preferred) / 用于命名的 Food log ID（优先使用）
+        image_index: Image index (0-based) for naming / 用于命名的图片索引（从0开始）
+        cache_db: Cache database instance (optional) / 缓存数据库实例（可选）
+        debug: Enable debug mode / 启用调试模式
+        
+    Returns:
+        Local file path or None if download failed / 本地文件路径或下载失败时返回None
+    """
+    # Check cache first
+    # 首先检查缓存
+    if cache_db and food_log_id is not None and image_index is not None:
+        cached = cache_db.get_image_cache(food_log_id=food_log_id, image_index=image_index)
+        if cached:
+            local_path = Path(cached["local_path"])
+            if local_path.exists():
+                if debug:
+                    print(f"[DEBUG] Using cached image: {local_path}")
+                return local_path
+    
+    # Also check by image_url as fallback
+    # 也通过 image_url 检查作为备用
+    if cache_db:
+        cached = cache_db.get_image_cache(image_url=image_url)
+        if cached:
+            local_path = Path(cached["local_path"])
+            if local_path.exists():
+                if debug:
+                    print(f"[DEBUG] Using cached image (by URL): {local_path}")
+                return local_path
+    
+    # Download image
+    # 下载图片
+    try:
+        images_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Generate filename from food_log_id + image_index (preferred) or URL hash (fallback)
+        # 从 food_log_id + image_index（优先）或 URL 哈希（备用）生成文件名
+        if food_log_id is not None and image_index is not None:
+            # Use food_log_id for naming
+            # 使用 food_log_id 命名
+            ext = guess_ext_from_url(image_url)
+            if image_index > 0:
+                filename = f"{food_log_id}_{image_index}{ext}"
+            else:
+                filename = f"{food_log_id}{ext}"
+        else:
+            # Fallback to URL hash
+            # 回退到 URL 哈希
+            import hashlib
+            url_hash = hashlib.md5(image_url.encode('utf-8')).hexdigest()
+            ext = guess_ext_from_url(image_url)
+            filename = f"{url_hash}{ext}"
+        
+        local_path = images_dir / filename
+        
+        if debug:
+            print(f"[DEBUG] Downloading image: {image_url[:100]}... -> {local_path}")
+        
+        with httpx.Client(timeout=30) as client:
+            response = client.get(image_url)
+            response.raise_for_status()
+            
+            # Save to file
+            # 保存到文件
+            local_path.write_bytes(response.content)
+            
+            # Compute file hash
+            # 计算文件哈希
+            import hashlib
+            file_hash = hashlib.md5(response.content).hexdigest()
+            file_size = len(response.content)
+            
+            # Save to cache
+            # 保存到缓存
+            if cache_db:
+                cache_db.save_image_cache(
+                    str(local_path),
+                    food_log_id=food_log_id,
+                    image_index=image_index,
+                    image_url=image_url,
+                    file_hash=file_hash,
+                    file_size=file_size
+                )
+                if debug:
+                    print(f"[DEBUG] Saved image to cache: {local_path}")
+            
+            return local_path
+            
+    except Exception as e:
+        if debug:
+            print(f"[DEBUG] Failed to download image {image_url[:100]}...: {e}")
+            import traceback
+            traceback.print_exc()
+        return None
+
+
 def parse_meal_type(row: pd.Series, language: str = 'zh') -> str:
     """
     Parse meal type from food log row.
@@ -811,6 +928,8 @@ def analyze_food_image_with_openai(
     openai_api_key: Optional[str] = None,
     prompt_file: Optional[Path] = None,
     patient_notes: Optional[str] = None,
+    food_log_id: Optional[str] = None,
+    cache_db: Optional[CacheDB] = None,
     debug: bool = False
 ) -> Optional[Dict[str, Any]]:
     """
@@ -822,6 +941,8 @@ def analyze_food_image_with_openai(
         openai_api_key: OpenAI API key (if None, will try to get from env) / OpenAI API key
         prompt_file: Path to prompt file (default: food_image_meal_summary_prompt.txt) / prompt文件路径
         patient_notes: Patient notes content to include in analysis (optional) / 包含在分析中的病人备注内容（可选）
+        food_log_id: Food log ID for caching (preferred) / 用于缓存的 Food log ID（优先使用）
+        cache_db: Cache database instance (optional) / 缓存数据库实例（可选）
         debug: Enable debug mode / 启用调试模式
         
     Returns:
@@ -831,6 +952,34 @@ def analyze_food_image_with_openai(
         if debug:
             print("[DEBUG] OpenAI package not available, skipping image analysis")
         return None
+    
+    # Normalize patient_notes: treat empty string as None for consistent caching
+    # 规范化 patient_notes：将空字符串视为 None 以保持缓存一致性
+    if patient_notes is not None and not patient_notes.strip():
+        patient_notes = None
+    
+    # Check cache first
+    # 首先检查缓存
+    if cache_db:
+        if debug:
+            if food_log_id:
+                print(f"[DEBUG] Checking cache for food_log_id: {food_log_id}")
+            else:
+                print(f"[DEBUG] Checking cache for image: {image_url[:100]}...")
+            if patient_notes:
+                print(f"[DEBUG] Patient notes: {patient_notes[:100]}...")
+        cached_summary = cache_db.get_ai_summary_cache(food_log_id, image_url, patient_notes)
+        if cached_summary:
+            if debug:
+                print(f"[DEBUG] ✓ Cache HIT! Using cached AI summary")
+            else:
+                print(f"[INFO] ✓ Using cached AI summary for food_log_id: {food_log_id or 'N/A'}")
+            return cached_summary
+        else:
+            if debug:
+                print(f"[DEBUG] ✗ Cache MISS")
+            else:
+                print(f"[INFO] ✗ Cache miss, generating new AI summary for food_log_id: {food_log_id or 'N/A'}")
     
     # Get API key from parameter or environment
     # 从参数或环境变量获取API key
@@ -898,6 +1047,13 @@ def analyze_food_image_with_openai(
         
         if debug:
             print(f"[DEBUG] Parsed meal summary: {summary.get('ai_title', 'N/A')}")
+        
+        # Save to cache
+        # 保存到缓存
+        if cache_db and summary:
+            cache_db.save_ai_summary_cache(summary, food_log_id, image_url, patient_notes)
+            if debug:
+                print(f"[DEBUG] Saved AI summary to cache for food_log_id: {food_log_id or 'N/A'}")
         
         return summary
         
@@ -1170,7 +1326,8 @@ def generate_html_summary(
     image_base_url: Optional[str] = None,
     language: str = 'zh',
     care_notes: Optional[List[Dict[str, Any]]] = None,
-    meal_summaries: Optional[Dict[str, Dict[str, Any]]] = None
+    meal_summaries: Optional[Dict[str, Dict[str, Any]]] = None,
+    cache_db: Optional[CacheDB] = None
 ) -> str:
     """
     Generate HTML summary similar to the attached image format.
@@ -1541,37 +1698,130 @@ def generate_html_summary(
             meal_summaries_list = []  # Store meal summaries for this meal
             
             for row in food_logs_by_meal[meal_type]:
+                # Get food log ID
+                # 获取 food log ID
+                food_log_id = None
+                for id_col in ["_id", "FoodLogId", "foodLogId"]:
+                    if id_col in row and pd.notna(row[id_col]):
+                        food_log_id = str(row[id_col]).strip()
+                        break
+                
                 # Collect images - check for ImageURLs first (direct URLs from API)
+                # 收集图片 - 首先检查 ImageURLs（来自 API 的直接 URL）
                 image_urls = row.get("ImageURLs")
                 if image_urls and isinstance(image_urls, list):
-                    # Use direct URLs from API - no need to download
-                    meal_images.extend(image_urls)
-                    # Collect meal summaries for these images
-                    # 为这些图片收集 meal summaries
-                    if meal_summaries:
-                        for img_url in image_urls:
-                            if img_url in meal_summaries:
-                                meal_summaries_list.append(meal_summaries[img_url])
+                    # Process each image URL
+                    # 处理每个图片 URL
+                    for image_index, img_url in enumerate(image_urls):
+                        # If using data URI mode, download and convert
+                        # 如果使用 data URI 模式，下载并转换
+                        if use_data_uri:
+                            local_path = download_image_with_cache(
+                                img_url,
+                                images_dir,
+                                food_log_id=food_log_id,
+                                image_index=image_index,
+                                cache_db=cache_db,
+                                debug=False
+                            )
+                            
+                            if local_path and local_path.exists():
+                                # Convert to data URI
+                                # 转换为 data URI
+                                try:
+                                    ext = local_path.suffix.lower()
+                                    mime = {
+                                        ".jpg": "image/jpeg",
+                                        ".jpeg": "image/jpeg",
+                                        ".png": "image/png",
+                                        ".gif": "image/gif",
+                                        ".webp": "image/webp",
+                                    }.get(ext, "image/jpeg")
+                                    data = local_path.read_bytes()
+                                    b64 = base64.b64encode(data).decode("ascii")
+                                    data_uri = f"data:{mime};base64,{b64}"
+                                    meal_images.append(data_uri)
+                                except Exception as e:
+                                    # If conversion fails, fall back to URL
+                                    # 如果转换失败，回退到 URL
+                                    meal_images.append(img_url)
+                            else:
+                                # Download failed, use URL directly
+                                # 下载失败，直接使用 URL
+                                meal_images.append(img_url)
+                        else:
+                            # Not using data URI, use URL directly
+                            # 不使用 data URI，直接使用 URL
+                            meal_images.append(img_url)
+                        
+                        # Collect meal summaries for these images
+                        # 为这些图片收集 meal summaries
+                        if meal_summaries and img_url in meal_summaries:
+                            meal_summaries_list.append(meal_summaries[img_url])
                 else:
                     # Fallback: check ImgName (might be URLs from API or local filenames)
                     img_names_str = str(row.get("ImgName", "") or "").strip()
                     img_items = [x.strip() for x in img_names_str.split(";") if x.strip()] if img_names_str else []
                     
-                    for img_item in img_items:
+                    for image_index, img_item in enumerate(img_items):
                         # Check if it's already a full URL (from API)
                         if img_item.startswith('http://') or img_item.startswith('https://'):
-                            # Direct URL from API, use it directly
-                            meal_images.append(img_item)
+                            # Direct URL from API
+                            # 如果是 data URI 模式，需要下载图片并转换为 data URI
+                            # If data URI mode, need to download image and convert to data URI
+                            if use_data_uri:
+                                # Try to download with cache
+                                # 尝试使用缓存下载
+                                local_path = download_image_with_cache(
+                                    img_item,
+                                    images_dir,
+                                    food_log_id=food_log_id,
+                                    image_index=image_index,
+                                    cache_db=cache_db,
+                                    debug=False
+                                )
+                                
+                                if local_path and local_path.exists():
+                                    # Convert to data URI
+                                    # 转换为 data URI
+                                    try:
+                                        ext = local_path.suffix.lower()
+                                        mime = {
+                                            ".jpg": "image/jpeg",
+                                            ".jpeg": "image/jpeg",
+                                            ".png": "image/png",
+                                            ".gif": "image/gif",
+                                            ".webp": "image/webp",
+                                        }.get(ext, "image/jpeg")
+                                        data = local_path.read_bytes()
+                                        b64 = base64.b64encode(data).decode("ascii")
+                                        data_uri = f"data:{mime};base64,{b64}"
+                                        meal_images.append(data_uri)
+                                    except Exception as e:
+                                        # If conversion fails, fall back to URL
+                                        # 如果转换失败，回退到 URL
+                                        meal_images.append(img_item)
+                                else:
+                                    # Download failed, use URL directly
+                                    # 下载失败，直接使用 URL
+                                    meal_images.append(img_item)
+                            else:
+                                # Not using data URI, use URL directly
+                                # 不使用 data URI，直接使用 URL
+                                meal_images.append(img_item)
+                            
                             # Collect meal summary if available
                             # 如果可用，收集 meal summary
                             if meal_summaries and img_item in meal_summaries:
                                 meal_summaries_list.append(meal_summaries[img_item])
                         else:
                             # Local filename - only process if file exists (backward compatibility)
+                            # 本地文件名 - 仅在文件存在时处理（向后兼容）
                             img_path = images_dir / img_item
                             if img_path.exists():
                                 if use_data_uri:
                                     # Convert to data URI for embedding in HTML
+                                    # 转换为 data URI 以嵌入 HTML
                                     try:
                                         ext = img_path.suffix.lower()
                                         mime = {
@@ -1587,6 +1837,7 @@ def generate_html_summary(
                                         meal_images.append(data_uri)
                                     except Exception as e:
                                         # If conversion fails, fall back to URL
+                                        # 如果转换失败，回退到 URL
                                         if image_base_url:
                                             meal_images.append(f"{image_base_url}/{img_item}")
                                         else:
@@ -1594,6 +1845,7 @@ def generate_html_summary(
                                             meal_images.append(relative_path)
                                 else:
                                     # Use URL path
+                                    # 使用 URL 路径
                                     if image_base_url:
                                         meal_images.append(f"{image_base_url}/{img_item}")
                                     else:

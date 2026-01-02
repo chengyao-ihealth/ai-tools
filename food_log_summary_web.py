@@ -39,6 +39,12 @@ from generate_food_log_summary import (
     analyze_food_image_with_openai
 )
 
+try:
+    from cache_db import CacheDB
+except ImportError:
+    CacheDB = None
+    print("[WARN] CacheDB not available. Caching will be disabled.", file=sys.stderr)
+
 # Load environment variables
 load_dotenv()
 
@@ -1059,6 +1065,15 @@ def api_generate_summary():
         # Connect to MongoDB
         client = get_mongo_client(MONGO_URI)
         
+        # Initialize cache database
+        # 初始化缓存数据库
+        cache_db = None
+        if CacheDB:
+            cache_db = CacheDB(db_path=Path("./cache.db"))
+            if debug:
+                stats = cache_db.get_cache_stats()
+                print(f"[DEBUG] Cache stats: {stats['image_cache_count']} images, {stats['ai_summary_cache_count']} summaries")
+        
         try:
             # Get patient info
             patient_info = get_patient_info(client, patient_id, DATABASE_NAME)
@@ -1114,6 +1129,14 @@ def api_generate_summary():
                 if OPENAI_API_KEY and has_food_logs:
                     print("[INFO] Generating AI meal summaries for food log images... / 正在为食物日志图片生成AI meal summaries...")
                     for _, row in food_logs_df.iterrows():
+                        # Get food log ID
+                        # 获取 food log ID
+                        food_log_id = None
+                        for id_col in ["_id", "FoodLogId", "foodLogId"]:
+                            if id_col in row and pd.notna(row[id_col]):
+                                food_log_id = str(row[id_col]).strip()
+                                break
+                        
                         # Get image URLs
                         image_urls = row.get("ImageURLs")
                         if not image_urls or not isinstance(image_urls, list):
@@ -1138,13 +1161,15 @@ def api_generate_summary():
                             for img_url in image_urls[:1]:  # Analyze first image only for now
                                 if img_url not in meal_summaries:  # Avoid duplicate analysis
                                     if debug:
-                                        print(f"[DEBUG] Analyzing image: {img_url[:100]}...")
+                                        print(f"[DEBUG] Analyzing image for food_log_id: {food_log_id}")
                                         if patient_notes_text:
                                             print(f"[DEBUG] Patient notes for this image: {patient_notes_text[:100]}...")
                                     summary = analyze_food_image_with_openai(
                                         img_url,
                                         openai_api_key=OPENAI_API_KEY,
                                         patient_notes=patient_notes_text,
+                                        food_log_id=food_log_id,
+                                        cache_db=cache_db,
                                         debug=debug
                                     )
                                     if summary:
@@ -1222,7 +1247,8 @@ def api_generate_summary():
                 image_base_url=None,
                 language=language,
                 care_notes=care_notes,  # Pass care notes to include in Patient Information section
-                meal_summaries=meal_summaries  # Pass meal summaries for display
+                meal_summaries=meal_summaries,  # Pass meal summaries for display
+                cache_db=cache_db  # Pass cache database for image caching
             )
             
             client.close()
