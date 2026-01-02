@@ -729,6 +729,8 @@ def download_image_with_cache(
     images_dir: Path,
     food_log_id: Optional[str] = None,
     image_index: Optional[int] = None,
+    patient_id: Optional[str] = None,
+    date: Optional[str] = None,
     cache_db: Optional[CacheDB] = None,
     debug: bool = False
 ) -> Optional[Path]:
@@ -741,6 +743,8 @@ def download_image_with_cache(
         images_dir: Directory to save images / 保存图片的目录
         food_log_id: Food log ID for naming (preferred) / 用于命名的 Food log ID（优先使用）
         image_index: Image index (0-based) for naming / 用于命名的图片索引（从0开始）
+        patient_id: Patient ID for naming / 用于命名的病人ID
+        date: Date string (YYYY-MM-DD) for naming / 用于命名的日期字符串（YYYY-MM-DD）
         cache_db: Cache database instance (optional) / 缓存数据库实例（可选）
         debug: Enable debug mode / 启用调试模式
         
@@ -774,12 +778,19 @@ def download_image_with_cache(
     try:
         images_dir.mkdir(parents=True, exist_ok=True)
         
-        # Generate filename from food_log_id + image_index (preferred) or URL hash (fallback)
-        # 从 food_log_id + image_index（优先）或 URL 哈希（备用）生成文件名
-        if food_log_id is not None and image_index is not None:
-            # Use food_log_id for naming
-            # 使用 food_log_id 命名
-            ext = guess_ext_from_url(image_url)
+        # Generate filename: patient_id_food_log_id_date.jpg
+        # 生成文件名：patient_id_food_log_id_date.jpg
+        ext = guess_ext_from_url(image_url)
+        if patient_id and food_log_id and date:
+            # New format: patient_id_food_log_id_date.jpg
+            # 新格式：patient_id_food_log_id_date.jpg
+            if image_index > 0:
+                filename = f"{patient_id}_{food_log_id}_{date}_{image_index}{ext}"
+            else:
+                filename = f"{patient_id}_{food_log_id}_{date}{ext}"
+        elif food_log_id is not None and image_index is not None:
+            # Fallback to old format: food_log_id_image_index
+            # 回退到旧格式：food_log_id_image_index
             if image_index > 0:
                 filename = f"{food_log_id}_{image_index}{ext}"
             else:
@@ -789,7 +800,6 @@ def download_image_with_cache(
             # 回退到 URL 哈希
             import hashlib
             url_hash = hashlib.md5(image_url.encode('utf-8')).hexdigest()
-            ext = guess_ext_from_url(image_url)
             filename = f"{url_hash}{ext}"
         
         local_path = images_dir / filename
@@ -929,6 +939,8 @@ def analyze_food_image_with_openai(
     prompt_file: Optional[Path] = None,
     patient_notes: Optional[str] = None,
     food_log_id: Optional[str] = None,
+    patient_id: Optional[str] = None,
+    date: Optional[str] = None,
     cache_db: Optional[CacheDB] = None,
     debug: bool = False
 ) -> Optional[Dict[str, Any]]:
@@ -973,13 +985,19 @@ def analyze_food_image_with_openai(
             if debug:
                 print(f"[DEBUG] ✓ Cache HIT! Using cached AI summary")
             else:
-                print(f"[INFO] ✓ Using cached AI summary for food_log_id: {food_log_id or 'N/A'}")
+                date_str = f", date: {date}" if date else ""
+                patient_str = f"patient_id: {patient_id}" if patient_id else "patient_id: N/A"
+                food_log_str = f", food_log_id: {food_log_id}" if food_log_id else ", food_log_id: N/A"
+                print(f"[INFO] ✓ Using cached AI summary for {patient_str}{food_log_str}{date_str}")
             return cached_summary
         else:
             if debug:
                 print(f"[DEBUG] ✗ Cache MISS")
             else:
-                print(f"[INFO] ✗ Cache miss, generating new AI summary for food_log_id: {food_log_id or 'N/A'}")
+                date_str = f", date: {date}" if date else ""
+                patient_str = f"patient_id: {patient_id}" if patient_id else "patient_id: N/A"
+                food_log_str = f", food_log_id: {food_log_id}" if food_log_id else ", food_log_id: N/A"
+                print(f"[INFO] ✗ Cache miss, generating new AI summary for {patient_str}{food_log_str}{date_str}")
     
     # Get API key from parameter or environment
     # 从参数或环境变量获取API key
@@ -1706,6 +1724,28 @@ def generate_html_summary(
                         food_log_id = str(row[id_col]).strip()
                         break
                 
+                # Extract date from food log (from createdAt or Date field)
+                # 从 food log 中提取日期（从 createdAt 或 Date 字段）
+                food_log_date = date  # Default to the summary date
+                if 'createdAt' in row and pd.notna(row['createdAt']):
+                    try:
+                        if isinstance(row['createdAt'], datetime):
+                            food_log_date = row['createdAt'].strftime('%Y-%m-%d')
+                        elif isinstance(row['createdAt'], str):
+                            # Try to parse the date string
+                            dt = datetime.fromisoformat(row['createdAt'].replace('Z', '+00:00'))
+                            food_log_date = dt.strftime('%Y-%m-%d')
+                    except:
+                        pass
+                elif 'Date' in row and pd.notna(row['Date']):
+                    try:
+                        if isinstance(row['Date'], datetime):
+                            food_log_date = row['Date'].strftime('%Y-%m-%d')
+                        elif isinstance(row['Date'], str):
+                            food_log_date = row['Date'][:10]  # Take YYYY-MM-DD part
+                    except:
+                        pass
+                
                 # Collect images - check for ImageURLs first (direct URLs from API)
                 # 收集图片 - 首先检查 ImageURLs（来自 API 的直接 URL）
                 image_urls = row.get("ImageURLs")
@@ -1721,6 +1761,8 @@ def generate_html_summary(
                                 images_dir,
                                 food_log_id=food_log_id,
                                 image_index=image_index,
+                                patient_id=patient_id,
+                                date=food_log_date,
                                 cache_db=cache_db,
                                 debug=False
                             )
@@ -1777,6 +1819,8 @@ def generate_html_summary(
                                     images_dir,
                                     food_log_id=food_log_id,
                                     image_index=image_index,
+                                    patient_id=patient_id,
+                                    date=food_log_date,
                                     cache_db=cache_db,
                                     debug=False
                                 )

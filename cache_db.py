@@ -92,12 +92,26 @@ class CacheDB:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS ai_summary_cache (
                 cache_key TEXT PRIMARY KEY,
+                food_log_id TEXT,
                 image_url TEXT NOT NULL,
                 patient_notes_hash TEXT,
                 summary_json TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        
+        # Check if food_log_id column exists, if not add it
+        # 检查是否存在 food_log_id 列，如果不存在则添加
+        try:
+            cursor.execute("PRAGMA table_info(ai_summary_cache)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if 'food_log_id' not in columns:
+                print("[INFO] Adding food_log_id column to ai_summary_cache table...")
+                cursor.execute("ALTER TABLE ai_summary_cache ADD COLUMN food_log_id TEXT")
+                conn.commit()
+                print("[OK] Migration completed")
+        except sqlite3.OperationalError:
+            pass
         
         # Create indexes for faster lookups
         # 创建索引以加快查询
@@ -112,6 +126,9 @@ class CacheDB:
         """)
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_ai_summary_notes_hash ON ai_summary_cache(patient_notes_hash)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ai_summary_food_log_id ON ai_summary_cache(food_log_id)
         """)
         
         conn.commit()
@@ -363,9 +380,9 @@ class CacheDB:
         
         cursor.execute("""
             INSERT OR REPLACE INTO ai_summary_cache
-            (cache_key, image_url, patient_notes_hash, summary_json, created_at)
-            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-        """, (cache_key, image_url or "", notes_hash, summary_json))
+            (cache_key, food_log_id, image_url, patient_notes_hash, summary_json, created_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        """, (cache_key, food_log_id or "", image_url or "", notes_hash, summary_json))
         
         conn.commit()
         conn.close()
@@ -394,6 +411,89 @@ class CacheDB:
         
         conn.commit()
         conn.close()
+    
+    def check_patient_cache_status(self, food_log_ids: list) -> Dict[str, Any]:
+        """
+        Check cache status for a list of food log IDs.
+        检查一系列 food log ID 的缓存状态。
+        
+        Args:
+            food_log_ids: List of food log IDs / Food log ID 列表
+            
+        Returns:
+            Dict with cached_images, cached_summaries, total_food_logs / 
+            包含 cached_images, cached_summaries, total_food_logs 的字典
+        """
+        if not food_log_ids:
+            return {
+                "cached_images": 0,
+                "cached_summaries": 0,
+                "total_food_logs": 0
+            }
+        
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        
+        # Count cached images for these food log IDs
+        # 统计这些 food log ID 的缓存图片数
+        placeholders = ','.join(['?'] * len(food_log_ids))
+        cursor.execute(f"""
+            SELECT COUNT(DISTINCT food_log_id || '_' || CAST(image_index AS TEXT))
+            FROM image_cache
+            WHERE food_log_id IN ({placeholders})
+        """, food_log_ids)
+        
+        cached_images = cursor.fetchone()[0] or 0
+        
+        # For AI summaries, we need to check by image_url
+        # Get all image_urls for these food log IDs from image_cache
+        # 对于 AI 摘要，需要通过 image_url 检查
+        # 从 image_cache 获取这些 food log ID 的所有 image_url
+        cursor.execute(f"""
+            SELECT DISTINCT image_url
+            FROM image_cache
+            WHERE food_log_id IN ({placeholders}) AND image_url IS NOT NULL
+        """, food_log_ids)
+        
+        image_urls = [row[0] for row in cursor.fetchall()]
+        
+        # Count cached AI summaries for these food log IDs
+        # 优先通过 food_log_id 检查
+        # 统计这些 food log ID 的缓存 AI 摘要数
+        cursor.execute(f"""
+            SELECT COUNT(DISTINCT food_log_id)
+            FROM ai_summary_cache
+            WHERE food_log_id IN ({placeholders}) AND food_log_id IS NOT NULL AND food_log_id != ''
+        """, food_log_ids)
+        
+        cached_summaries_by_id = cursor.fetchone()[0] or 0
+        
+        # Also check by image_url as fallback (for old cache entries without food_log_id)
+        # 也通过 image_url 检查作为回退（对于没有 food_log_id 的旧缓存条目）
+        cached_summaries_by_url = 0
+        if image_urls:
+            url_placeholders = ','.join(['?'] * len(image_urls))
+            # Get image URLs that don't have food_log_id in cache
+            # 获取缓存中没有 food_log_id 的 image URL
+            id_placeholders = ','.join(['?'] * len(food_log_ids))
+            cursor.execute(f"""
+                SELECT COUNT(DISTINCT image_url)
+                FROM ai_summary_cache
+                WHERE image_url IN ({url_placeholders}) 
+                AND (food_log_id IS NULL OR food_log_id = '' OR food_log_id NOT IN ({id_placeholders}))
+            """, image_urls + food_log_ids)
+            
+            cached_summaries_by_url = cursor.fetchone()[0] or 0
+        
+        cached_summaries = cached_summaries_by_id + cached_summaries_by_url
+        
+        conn.close()
+        
+        return {
+            "cached_images": cached_images,
+            "cached_summaries": cached_summaries,
+            "total_food_logs": len(food_log_ids)
+        }
     
     def clear_all_cache(self):
         """Clear all cache entries."""
