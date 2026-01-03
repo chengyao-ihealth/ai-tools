@@ -620,7 +620,7 @@ class CacheDB:
     def get_period_insight_cache(
         self,
         patient_id: str,
-        period_type: str,  # 'weekly' or 'monthly'
+        period_type: str,  # 'weekly', 'monthly', or 'food_swapping'
         end_date: str,  # Query date (YYYY-MM-DD) - cache is based on this date
         language: str = 'zh',
         start_date: Optional[str] = None  # Kept for backward compatibility, not used in cache key
@@ -635,7 +635,7 @@ class CacheDB:
         
         Args:
             patient_id: Patient ID / 病人ID
-            period_type: 'weekly' or 'monthly' / 'weekly' 或 'monthly'
+            period_type: 'weekly', 'monthly', or 'food_swapping' / 'weekly'、'monthly' 或 'food_swapping'
             end_date: Query date string (YYYY-MM-DD) / 查询日期字符串（YYYY-MM-DD）
             language: Language code / 语言代码
             start_date: Start date (deprecated, kept for compatibility) / 开始日期（已弃用，保留以兼容）
@@ -666,7 +666,7 @@ class CacheDB:
     def save_period_insight_cache(
         self,
         patient_id: str,
-        period_type: str,  # 'weekly' or 'monthly'
+        period_type: str,  # 'weekly', 'monthly', or 'food_swapping'
         end_date: str,  # Query date (YYYY-MM-DD) - cache is based on this date
         insight_text: str,
         language: str = 'zh',
@@ -682,7 +682,7 @@ class CacheDB:
         
         Args:
             patient_id: Patient ID / 病人ID
-            period_type: 'weekly' or 'monthly' / 'weekly' 或 'monthly'
+            period_type: 'weekly', 'monthly', or 'food_swapping' / 'weekly'、'monthly' 或 'food_swapping'
             end_date: Query date string (YYYY-MM-DD) / 查询日期字符串（YYYY-MM-DD）
             insight_text: Generated insight text / 生成的洞察文本
             language: Language code / 语言代码

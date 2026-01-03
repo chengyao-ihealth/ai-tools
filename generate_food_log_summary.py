@@ -2712,6 +2712,344 @@ def generate_weekly_or_monthly_insight(
         return None
 
 
+def generate_food_swapping_advice(
+    patient_info: Dict[str, Any],
+    patient_id: str,
+    end_date: datetime,
+    openai_api_key: Optional[str] = None,
+    prompt_file: Optional[Path] = None,
+    language: str = 'zh',
+    cache_db: Optional[CacheDB] = None,
+    session_token: Optional[str] = None,
+    regenerate: bool = False,
+    debug: bool = False
+) -> Optional[str]:
+    """
+    Generate food swapping advice based on patient's food logs from the past week.
+    基于病人过去一周的食物日志生成食物替换建议。
+    
+    Args:
+        patient_info: Patient information dictionary / 病人信息字典
+        patient_id: Patient ID / 病人ID
+        end_date: End date (query date) / 结束日期（查询日期）
+        openai_api_key: OpenAI API key / OpenAI API key
+        prompt_file: Path to prompt file / prompt文件路径
+        language: Language for output / 输出语言
+        cache_db: Cache database instance / 缓存数据库实例
+        session_token: Session token for API calls / API调用的会话令牌
+        regenerate: Force regeneration / 强制重新生成
+        debug: Enable debug mode / 启用调试模式
+        
+    Returns:
+        Generated advice text or None if failed / 生成的建议文本或None
+    """
+    if OpenAI is None:
+        if debug:
+            print("[DEBUG] OpenAI package not available, skipping food swapping advice generation")
+        return None
+    
+    # Get API key
+    api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        if debug:
+            print("[DEBUG] OPENAI_API_KEY not found, skipping food swapping advice generation")
+        return None
+    
+    try:
+        print(f"[INFO] Generating food swapping advice for patient {patient_id} (query date: {end_date})")
+        
+        # Check cache first (unless regenerate is True)
+        # 首先检查缓存（除非 regenerate 为 True）
+        # Cache is based on query date (end_date), not date range
+        # 缓存基于查询日期（end_date），而不是日期范围
+        end_date_str = end_date.strftime('%Y-%m-%d') if hasattr(end_date, 'strftime') else str(end_date)
+        
+        if cache_db and not regenerate:
+            # Use period_insight_cache with period_type='food_swapping'
+            # 使用 period_insight_cache，period_type='food_swapping'
+            cached_advice = cache_db.get_period_insight_cache(
+                patient_id=patient_id,
+                period_type='food_swapping',
+                end_date=end_date_str,
+                language=language
+            )
+            
+            if cached_advice:
+                print(f"[INFO] ✓ Using cached food swapping advice for patient {patient_id} (query date: {end_date_str})")
+                return cached_advice
+            else:
+                print(f"[INFO] ✗ Cache miss, generating new food swapping advice for patient {patient_id} (query date: {end_date_str})")
+        elif regenerate:
+            print(f"[INFO] Regenerate mode: clearing food swapping advice cache for patient {patient_id} (query date: {end_date_str})")
+            # The cache will be overwritten when we save the new advice
+            # 当我们保存新的建议时，缓存会被覆盖
+            pass
+        
+        # Calculate start date (7 days before end_date)
+        # 计算开始日期（end_date 前7天）
+        if hasattr(end_date, 'date'):
+            end_date_only = end_date.date()
+        else:
+            end_date_only = end_date
+        
+        start_date_only = end_date_only - timedelta(days=7)
+        start_date = datetime.combine(start_date_only, datetime.min.time())
+        end_date_dt = datetime.combine(end_date_only, datetime.max.time())
+        
+        # Use the existing daily summary generation logic to get food logs and AI summaries
+        # 使用现有的daily summary生成逻辑获取food logs和AI summaries
+        from query_food_logs import query_food_logs
+        
+        # Get MongoDB client
+        client = get_mongo_client()
+        
+        # Handle timezone-aware datetime for query
+        import pytz
+        if start_date.tzinfo is None:
+            start_date_pt = pytz.timezone("America/Los_Angeles").localize(start_date)
+        else:
+            start_date_pt = start_date.astimezone(pytz.timezone("America/Los_Angeles"))
+        
+        if end_date_dt.tzinfo is None:
+            end_date_pt = pytz.timezone("America/Los_Angeles").localize(end_date_dt)
+        else:
+            end_date_pt = end_date_dt.astimezone(pytz.timezone("America/Los_Angeles"))
+        
+        # Convert to UTC for MongoDB query
+        start_date_utc = start_date_pt.astimezone(pytz.utc).replace(tzinfo=None)
+        end_date_utc = end_date_pt.astimezone(pytz.utc).replace(tzinfo=None)
+        
+        print(f"[INFO] Querying food logs from {start_date_utc} to {end_date_utc} (past week)")
+        
+        # Query food logs
+        food_logs_df = query_food_logs(
+            client,
+            [patient_id],
+            database_name="UnifiedCare",
+            start_date=start_date_utc,
+            end_date=end_date_utc
+        )
+        
+        print(f"[INFO] Found {len(food_logs_df)} food logs for the past week")
+        
+        if food_logs_df.empty:
+            print(f"[WARN] No food logs found for the past week")
+            return None
+        
+        # Get image URLs for all food logs
+        if session_token:
+            print(f"[INFO] Fetching image URLs for {len(food_logs_df)} food logs...")
+            food_logs_df, _ = get_food_log_image_urls(
+                food_logs_df,
+                session_token,
+                debug=debug
+            )
+            print(f"[INFO] Image URLs fetched")
+        else:
+            print(f"[WARN] No session token provided, skipping image URL fetch")
+        
+        # Collect all AI summaries from cache or generate if missing
+        # 从缓存收集所有AI summaries，如果缺失则生成
+        all_meal_summaries = []
+        for _, row in food_logs_df.iterrows():
+            # Get food log ID
+            food_log_id = None
+            for id_col in ["_id", "FoodLogId", "foodLogId"]:
+                if id_col in row and pd.notna(row[id_col]):
+                    food_log_id = str(row[id_col]).strip()
+                    break
+            
+            # Get image URLs
+            image_urls = row.get("ImageURLs")
+            if not image_urls or not isinstance(image_urls, list):
+                img_names_str = str(row.get("ImgName", "") or "").strip()
+                if img_names_str:
+                    image_urls = [url.strip() for url in img_names_str.split(";") 
+                                if url.strip() and (url.startswith('http://') or url.startswith('https://'))]
+            
+            # Extract patient notes
+            patient_notes_text = None
+            if 'Description' in row and pd.notna(row['Description']):
+                patient_notes_text = str(row['Description']).strip()
+            elif 'note' in row and pd.notna(row['note']):
+                patient_notes_text = str(row['note']).strip()
+            elif 'description' in row and pd.notna(row['description']):
+                patient_notes_text = str(row['description']).strip()
+            
+            # Extract date
+            food_log_date = None
+            if 'createdAt' in row and pd.notna(row['createdAt']):
+                try:
+                    if isinstance(row['createdAt'], datetime):
+                        food_log_date = row['createdAt'].strftime('%Y-%m-%d')
+                    elif isinstance(row['createdAt'], str):
+                        dt = datetime.fromisoformat(row['createdAt'].replace('Z', '+00:00'))
+                        food_log_date = dt.strftime('%Y-%m-%d')
+                except:
+                    pass
+            elif 'Date' in row and pd.notna(row['Date']):
+                try:
+                    if isinstance(row['Date'], datetime):
+                        food_log_date = row['Date'].strftime('%Y-%m-%d')
+                    elif isinstance(row['Date'], str):
+                        food_log_date = row['Date'][:10]
+                except:
+                    pass
+            
+            # Get meal type
+            meal_type = row.get('MealType', 'Other')
+            if pd.isna(meal_type):
+                meal_type = 'Other'
+            
+            # Analyze first image to get AI summary
+            if image_urls:
+                for img_url in image_urls[:1]:  # Analyze first image only
+                    summary = analyze_food_image_with_openai(
+                        img_url,
+                        openai_api_key=api_key,
+                        patient_notes=patient_notes_text,
+                        food_log_id=food_log_id,
+                        patient_id=patient_id,
+                        date=food_log_date,
+                        cache_db=cache_db,
+                        regenerate=False,  # Always use cache or generate if missing, don't force regeneration
+                        debug=debug
+                    )
+                    if summary:
+                        all_meal_summaries.append({
+                            'date': food_log_date,
+                            'meal_type': meal_type,
+                            'summary': summary
+                        })
+                    break
+        
+        client.close()
+        
+        if not all_meal_summaries:
+            print(f"[WARN] No AI summaries available for food swapping advice")
+            return None
+        
+        # Analyze frequent foods by meal type
+        # 按餐类型分析经常吃的食物
+        from collections import Counter
+        frequent_foods_by_meal = {}
+        for entry in all_meal_summaries:
+            meal_type = entry['meal_type']
+            summary = entry['summary']
+            
+            # Extract food items from summary
+            food_items = []
+            if 'ai_title' in summary:
+                food_items.append(summary['ai_title'])
+            if 'food_items' in summary and isinstance(summary['food_items'], list):
+                food_items.extend(summary['food_items'])
+            elif 'food_items' in summary and isinstance(summary['food_items'], str):
+                food_items.append(summary['food_items'])
+            
+            if meal_type not in frequent_foods_by_meal:
+                frequent_foods_by_meal[meal_type] = []
+            frequent_foods_by_meal[meal_type].extend(food_items)
+        
+        # Count frequency
+        frequent_foods_summary = {}
+        for meal_type, foods in frequent_foods_by_meal.items():
+            counter = Counter(foods)
+            frequent_foods_summary[meal_type] = dict(counter.most_common(10))
+        
+        # Format frequent foods summary for prompt
+        frequent_foods_text = ""
+        for meal_type, foods in frequent_foods_summary.items():
+            frequent_foods_text += f"\n{meal_type}:\n"
+            for food, count in foods.items():
+                frequent_foods_text += f"  - {food} (appeared {count} time(s))\n"
+        
+        # Prepare patient information for prompt
+        patient_background = patient_info.get('background', 'Not specified')
+        medical_history = patient_info.get('medicalHistory', 'Not specified')
+        nutritional_goals = patient_info.get('nutritionalGoals', 'Not specified')
+        nutritional_considerations = patient_info.get('nutritionalConsiderations', 'Not specified')
+        dietary_preferences = patient_info.get('dietaryPreferences', 'Not specified')
+        cultural_background = patient_info.get('culturalBackground', 'Not specified')
+        age = patient_info.get('age', 'Not specified')
+        
+        # Load prompt file
+        if prompt_file is None:
+            prompt_file = Path(__file__).parent / "food_swapping_advice_prompt.txt"
+        
+        try:
+            prompt_text = prompt_file.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            print(f"[ERROR] Prompt file not found: {prompt_file}")
+            return None
+        
+        # Format prompt with patient information
+        prompt_text = prompt_text.format(
+            patient_background=patient_background,
+            medical_history=medical_history,
+            nutritional_goals=nutritional_goals,
+            nutritional_considerations=nutritional_considerations,
+            dietary_preferences=dietary_preferences,
+            cultural_background=cultural_background,
+            age=age,
+            frequent_foods_summary=frequent_foods_text
+        )
+        
+        # Add language instruction
+        if language == 'zh':
+            prompt_text += "\n\nPlease respond in Chinese (Simplified)."
+        else:
+            prompt_text += "\n\nPlease respond in English."
+        
+        # Call OpenAI
+        print(f"[INFO] Calling OpenAI API to generate food swapping advice...")
+        try:
+            client = OpenAI(api_key=api_key)
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": prompt_text
+                    }
+                ],
+                max_tokens=2000,
+                temperature=0.7
+            )
+            
+            advice_text = response.choices[0].message.content
+            print(f"[INFO] Generated food swapping advice: {len(advice_text)} characters")
+            
+            # Save to cache
+            # 保存到缓存
+            # Cache is based on query date (end_date) only
+            # 缓存仅基于查询日期（end_date）
+            if cache_db and advice_text:
+                end_date_str = end_date.strftime('%Y-%m-%d') if hasattr(end_date, 'strftime') else str(end_date)
+                cache_db.save_period_insight_cache(
+                    patient_id=patient_id,
+                    period_type='food_swapping',
+                    end_date=end_date_str,
+                    insight_text=advice_text,
+                    language=language,
+                    start_date=end_date_str  # Stored for reference but not used in cache key
+                )
+                print(f"[INFO] Saved food swapping advice to cache (query date: {end_date_str})")
+            
+            return advice_text
+        except Exception as e:
+            print(f"[ERROR] OpenAI API call failed: {e}")
+            if debug:
+                import traceback
+                traceback.print_exc()
+            return None
+        
+    except Exception as e:
+        print(f"[ERROR] Error generating food swapping advice: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Generate food log summary for a specific patient on a specific date. / 为特定病人在特定日期生成食物日志总结。"

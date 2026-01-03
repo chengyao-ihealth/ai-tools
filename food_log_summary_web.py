@@ -38,7 +38,8 @@ from generate_food_log_summary import (
     generate_html_summary,
     analyze_food_image_with_openai,
     download_image_with_cache,
-    generate_weekly_or_monthly_insight
+    generate_weekly_or_monthly_insight,
+    generate_food_swapping_advice
 )
 
 try:
@@ -363,7 +364,7 @@ def get_care_note_by_id(
 
 
 # HTML Template for the web interface
-HTML_TEMPLATE = """
+HTML_TEMPLATE = r"""
 <!DOCTYPE html>
 <html lang="zh">
 <head>
@@ -594,6 +595,9 @@ HTML_TEMPLATE = """
                 <button type="button" id="generateMonthlyBtn" style="background: #4a90e2;">
                     <span id="generateMonthlyText">月洞察</span>
                 </button>
+                <button type="button" id="generateFoodSwappingBtn" style="background: #4a90e2;">
+                    <span id="generateFoodSwappingText">食物替换建议</span>
+                </button>
             </div>
         </form>
         
@@ -628,6 +632,14 @@ HTML_TEMPLATE = """
         
         <div class="error" id="error"></div>
         
+        <div class="loading" id="periodLoading" style="margin-top: 20px;">
+            <div class="spinner"></div>
+            <div id="periodLoadingText">正在生成洞察，请稍候...</div>
+            <div id="periodProgress" style="margin-top: 10px; font-size: 14px; color: #666;"></div>
+        </div>
+        
+        <div class="error" id="periodError"></div>
+        
         <div class="result-container" id="resultContainer">
             <div class="result-header" onclick="toggleResultContainer('resultContainer')">
                 <h2 id="resultTitle">生成的总结</h2>
@@ -638,17 +650,13 @@ HTML_TEMPLATE = """
             </div>
         </div>
         
-        <div class="loading" id="periodLoading" style="margin-top: 20px;">
-            <div class="spinner"></div>
-            <div id="periodLoadingText">正在生成洞察，请稍候...</div>
-            <div id="periodProgress" style="margin-top: 10px; font-size: 14px; color: #666;"></div>
-        </div>
-        
-        <div class="error" id="periodError"></div>
-        
         <div class="result-container" id="periodResultContainer" style="margin-top: 20px;">
-            <h2 id="periodResultTitle" style="color: #2c3e50; font-size: 24px; margin-bottom: 15px;">生成的洞察</h2>
-            <div id="periodResultText" style="padding: 25px; background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%); border-radius: 12px; border-left: 5px solid #4a90e2; box-shadow: 0 2px 8px rgba(0,0,0,0.1); color: #555; font-size: 15px; line-height: 1.8;">
+            <div class="result-header" onclick="toggleResultContainer('periodResultContainer')">
+                <h2 id="periodResultTitle" style="color: #2c3e50; font-size: 24px; margin: 0; flex: 1;">生成的洞察</h2>
+                <span class="collapse-icon">▼</span>
+            </div>
+            <div class="result-content">
+                <div id="periodResultText" style="padding: 25px; background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%); border-radius: 12px; border-left: 5px solid #4a90e2; box-shadow: 0 2px 8px rgba(0,0,0,0.1); color: #555; font-size: 15px; line-height: 1.8;">
                 <style>
                     #periodResultText h1 { font-size: 28px; font-weight: 700; margin-top: 30px; margin-bottom: 15px; color: #2c3e50; }
                     #periodResultText h2 { font-size: 22px; font-weight: 700; margin-top: 25px; margin-bottom: 12px; color: #2c3e50; }
@@ -662,6 +670,18 @@ HTML_TEMPLATE = """
                     #periodResultText pre { background: #f4f4f4; padding: 15px; border-radius: 5px; overflow-x: auto; }
                     #periodResultText pre code { background: none; padding: 0; }
                     #periodResultText blockquote { border-left: 4px solid #4a90e2; padding-left: 15px; margin: 15px 0; color: #666; }
+                    /* Style for nutrition compliance scores */
+                    #periodResultText .nutrition-score {
+                        display: inline-block;
+                        padding: 3px 8px;
+                        border-radius: 4px;
+                        font-weight: 700;
+                        font-size: 14px;
+                        margin-left: 5px;
+                    }
+                    #periodResultText .nutrition-score.low { background: #ffebee; color: #c62828; }
+                    #periodResultText .nutrition-score.medium { background: #fff3e0; color: #e65100; }
+                    #periodResultText .nutrition-score.high { background: #e8f5e9; color: #2e7d32; }
                 </style>
             </div>
         </div>
@@ -712,6 +732,7 @@ HTML_TEMPLATE = """
                 finalSummary: '完成！处理了 {processed}/{total} 个病人，生成了 {images} 张图片缓存和 {summaries} 个AI摘要缓存。',
                 generateWeekly: '周洞察',
                 generateMonthly: '月洞察',
+                generateFoodSwapping: '食物替换建议',
                 periodLoading: '正在生成洞察，请稍候...',
                 periodError: '生成洞察失败',
                 periodResultTitle: '生成的洞察',
@@ -764,6 +785,7 @@ HTML_TEMPLATE = """
                 finalSummary: 'Complete! Processed {processed}/{total} patients, generated {images} image caches and {summaries} AI summary caches.',
                 generateWeekly: 'Weekly Insights',
                 generateMonthly: 'Monthly Insights',
+                generateFoodSwapping: 'Food Swapping Advice',
                 periodLoading: 'Generating insights, please wait...',
                 periodError: 'Failed to generate insights',
                 periodResultTitle: 'Generated Insights',
@@ -822,11 +844,13 @@ HTML_TEMPLATE = """
             // Update period insights section
             const generateWeeklyText = document.getElementById('generateWeeklyText');
             const generateMonthlyText = document.getElementById('generateMonthlyText');
+            const generateFoodSwappingText = document.getElementById('generateFoodSwappingText');
             const periodLoadingText = document.getElementById('periodLoadingText');
             const periodResultTitle = document.getElementById('periodResultTitle');
             
             if (generateWeeklyText) generateWeeklyText.textContent = t.generateWeekly;
             if (generateMonthlyText) generateMonthlyText.textContent = t.generateMonthly;
+            if (generateFoodSwappingText) generateFoodSwappingText.textContent = t.generateFoodSwapping;
             if (periodLoadingText) periodLoadingText.textContent = t.periodLoading;
             if (periodResultTitle) periodResultTitle.textContent = t.periodResultTitle;
             
@@ -1384,6 +1408,12 @@ HTML_TEMPLATE = """
                 if (data.error) {
                     showError(data.error);
                 } else {
+                    // Update title to "Generated Daily Summary"
+                    const resultTitle = document.getElementById('resultTitle');
+                    if (resultTitle) {
+                        resultTitle.textContent = currentLang === 'zh' ? '生成的每日总结' : 'Generated Daily Summary';
+                    }
+                    
                     // Show result in iframe
                     const frame = document.getElementById('resultFrame');
                     frame.srcdoc = data.html;
@@ -1521,6 +1551,12 @@ HTML_TEMPLATE = """
                     periodError.textContent = data.error;
                     periodError.classList.add('active');
                 } else if (data.insight) {
+                    // Update title to "Generated Weekly Insights"
+                    const periodResultTitle = document.getElementById('periodResultTitle');
+                    if (periodResultTitle) {
+                        periodResultTitle.textContent = currentLang === 'zh' ? '生成的周洞察' : 'Generated Weekly Insights';
+                    }
+                    
                     // Render markdown to HTML
                     if (typeof marked !== 'undefined') {
                         periodResultText.innerHTML = marked.parse(data.insight);
@@ -1602,6 +1638,12 @@ HTML_TEMPLATE = """
                     periodError.textContent = data.error;
                     periodError.classList.add('active');
                 } else if (data.insight) {
+                    // Update title to "Generated Monthly Insights"
+                    const periodResultTitle = document.getElementById('periodResultTitle');
+                    if (periodResultTitle) {
+                        periodResultTitle.textContent = currentLang === 'zh' ? '生成的月洞察' : 'Generated Monthly Insights';
+                    }
+                    
                     // Render markdown to HTML
                     if (typeof marked !== 'undefined') {
                         periodResultText.innerHTML = marked.parse(data.insight);
@@ -1619,6 +1661,110 @@ HTML_TEMPLATE = """
                 }
             } catch (error) {
                 console.error('Error generating monthly insight:', error);
+                periodError.textContent = t.periodError + ': ' + error.message;
+                periodError.classList.add('active');
+            } finally {
+                periodLoading.classList.remove('active');
+                btn.disabled = false;
+            }
+        });
+        
+        // Handle food swapping advice button
+        document.getElementById('generateFoodSwappingBtn').addEventListener('click', async function() {
+            const t = translations[currentLang];
+            const patientId = document.getElementById('patientSelect').value;
+            const selectedDate = document.getElementById('dateSelect').value;
+            
+            if (!patientId) {
+                alert(t.selectPatientForPeriod);
+                return;
+            }
+            
+            if (!selectedDate) {
+                alert(currentLang === 'zh' ? '请选择日期' : 'Please select a date');
+                return;
+            }
+            
+            const periodLoading = document.getElementById('periodLoading');
+            const periodError = document.getElementById('periodError');
+            const periodResultContainer = document.getElementById('periodResultContainer');
+            const periodResultText = document.getElementById('periodResultText');
+            const btn = document.getElementById('generateFoodSwappingBtn');
+            
+            periodLoading.classList.add('active');
+            periodError.classList.remove('active');
+            periodResultContainer.classList.remove('active');
+            periodError.textContent = '';
+            btn.disabled = true;
+            
+            try {
+                const periodProgress = document.getElementById('periodProgress');
+                if (periodProgress) {
+                    periodProgress.textContent = t.periodLoading;
+                }
+                
+                const regenerate = document.getElementById('regenerateCheckbox').checked;
+                const response = await fetch('/api/generate-food-swapping-advice', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        patient_id: patientId,
+                        date: selectedDate,
+                        language: currentLang,
+                        regenerate: regenerate
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                if (data.error) {
+                    periodError.textContent = data.error;
+                    periodError.classList.add('active');
+                } else if (data.advice) {
+                    // Update title to "Generated Food Swapping Advice"
+                    const periodResultTitle = document.getElementById('periodResultTitle');
+                    if (periodResultTitle) {
+                        periodResultTitle.textContent = currentLang === 'zh' ? '生成的食物替换建议' : 'Generated Food Swapping Advice';
+                    }
+                    
+                    // Render markdown to HTML and enhance nutrition scores
+                    let adviceHtml = '';
+                    if (typeof marked !== 'undefined') {
+                        adviceHtml = marked.parse(data.advice);
+                        // Enhance nutrition compliance scores with visual styling
+                        // Match patterns like "Nutrition compliance score: 0.5" or "营养符合度评分: 0.5"
+                        adviceHtml = adviceHtml.replace(
+                            /(?:Nutrition compliance score|营养符合度评分|营养符合度|符合度评分)[:\s]*([0-9]*\.?[0-9]+)/gi,
+                            function(match, score) {
+                                const numScore = parseFloat(score);
+                                let scoreClass = 'medium';
+                                if (numScore < 0.4) {
+                                    scoreClass = 'low';
+                                } else if (numScore >= 0.8) {
+                                    scoreClass = 'high';
+                                }
+                                return match.replace(score, '<span class="nutrition-score ' + scoreClass + '">' + score + '</span>');
+                            }
+                        );
+                        periodResultText.innerHTML = adviceHtml;
+                    } else {
+                        // Fallback: escape HTML and preserve line breaks
+                        const escaped = data.advice.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                        periodResultText.innerHTML = '<pre style="white-space: pre-wrap; font-family: inherit;">' + escaped + '</pre>';
+                    }
+                    periodResultContainer.classList.add('active');
+                    if (periodProgress) {
+                        periodProgress.textContent = '';
+                    }
+                } else {
+                    throw new Error('No advice data received');
+                }
+            } catch (error) {
+                console.error('Error generating food swapping advice:', error);
                 periodError.textContent = t.periodError + ': ' + error.message;
                 periodError.classList.add('active');
             } finally {
@@ -2340,6 +2486,65 @@ def api_generate_monthly_insight():
             return jsonify({"insight": insight})
         else:
             return jsonify({"error": "Failed to generate monthly insight"}), 500
+            
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/generate-food-swapping-advice', methods=['POST'])
+def api_generate_food_swapping_advice():
+    """API endpoint to generate food swapping advice."""
+    try:
+        data = request.json
+        patient_id = data.get('patient_id')
+        date_str = data.get('date')  # User selected date
+        language = data.get('language', 'zh')
+        regenerate = data.get('regenerate', False)
+        
+        if not patient_id:
+            return jsonify({"error": "Patient ID is required"}), 400
+        
+        if not date_str:
+            return jsonify({"error": "Date is required"}), 400
+        
+        if not OPENAI_API_KEY:
+            return jsonify({"error": "OPENAI_API_KEY not configured"}), 500
+        
+        # Get patient info
+        client = get_mongo_client(MONGO_URI)
+        patient_info = get_patient_info(client, patient_id)
+        client.close()
+        
+        # Parse user selected date
+        import pytz
+        try:
+            selected_date = datetime.strptime(date_str, "%Y-%m-%d")
+            pt_timezone = pytz.timezone("America/Los_Angeles")
+            # Use selected date as end_date (end of day)
+            end_date = pt_timezone.localize(selected_date.replace(hour=23, minute=59, second=59, microsecond=999999))
+        except ValueError:
+            return jsonify({"error": "Invalid date format. Use YYYY-MM-DD"}), 400
+        
+        # Generate food swapping advice
+        cache_db = CacheDB(db_path=Path("./cache.db")) if CacheDB else None
+        advice = generate_food_swapping_advice(
+            patient_info,
+            patient_id,
+            end_date,
+            openai_api_key=OPENAI_API_KEY,
+            language=language,
+            cache_db=cache_db,
+            session_token=SESSION_TOKEN,
+            regenerate=regenerate,
+            debug=False
+        )
+        
+        if advice:
+            return jsonify({"advice": advice})
+        else:
+            return jsonify({"error": "Failed to generate food swapping advice"}), 500
             
     except Exception as e:
         import traceback
