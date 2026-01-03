@@ -131,6 +131,29 @@ class CacheDB:
             CREATE INDEX IF NOT EXISTS idx_ai_summary_food_log_id ON ai_summary_cache(food_log_id)
         """)
         
+        # Period insight cache table (weekly/monthly insights)
+        # 周期洞察缓存表（周/月洞察）
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS period_insight_cache (
+                cache_key TEXT PRIMARY KEY,
+                patient_id TEXT NOT NULL,
+                period_type TEXT NOT NULL,
+                start_date TEXT NOT NULL,
+                end_date TEXT NOT NULL,
+                language TEXT NOT NULL,
+                insight_text TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(patient_id, period_type, start_date, end_date, language)
+            )
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_period_insight_patient ON period_insight_cache(patient_id)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_period_insight_type ON period_insight_cache(period_type)
+        """)
+        
         conn.commit()
         conn.close()
     
@@ -567,10 +590,93 @@ class CacheDB:
         
         conn.close()
         
+        cursor.execute("SELECT COUNT(*) FROM period_insight_cache")
+        period_insight_count = cursor.fetchone()[0]
+        
+        conn.close()
+        
         return {
             "image_cache_count": image_count,
             "ai_summary_cache_count": summary_count,
+            "period_insight_cache_count": period_insight_count,
             "total_image_size_bytes": total_size,
             "total_image_size_mb": round(total_size / (1024 * 1024), 2) if total_size > 0 else 0
         }
+    
+    def get_period_insight_cache(
+        self,
+        patient_id: str,
+        period_type: str,  # 'weekly' or 'monthly'
+        start_date: str,
+        end_date: str,
+        language: str = 'zh'
+    ) -> Optional[str]:
+        """
+        Get cached period insight.
+        获取缓存的周期洞察。
+        
+        Args:
+            patient_id: Patient ID / 病人ID
+            period_type: 'weekly' or 'monthly' / 'weekly' 或 'monthly'
+            start_date: Start date string (YYYY-MM-DD) / 开始日期字符串
+            end_date: End date string (YYYY-MM-DD) / 结束日期字符串
+            language: Language code / 语言代码
+            
+        Returns:
+            Cached insight text or None / 缓存的洞察文本或None
+        """
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT insight_text, created_at
+            FROM period_insight_cache
+            WHERE patient_id = ? AND period_type = ? AND start_date = ? AND end_date = ? AND language = ?
+        """, (patient_id, period_type, start_date, end_date, language))
+        
+        row = cursor.fetchone()
+        conn.close()
+        
+        if row:
+            insight_text, created_at = row
+            return insight_text
+        
+        return None
+    
+    def save_period_insight_cache(
+        self,
+        patient_id: str,
+        period_type: str,  # 'weekly' or 'monthly'
+        start_date: str,
+        end_date: str,
+        insight_text: str,
+        language: str = 'zh'
+    ):
+        """
+        Save period insight to cache.
+        保存周期洞察到缓存。
+        
+        Args:
+            patient_id: Patient ID / 病人ID
+            period_type: 'weekly' or 'monthly' / 'weekly' 或 'monthly'
+            start_date: Start date string (YYYY-MM-DD) / 开始日期字符串
+            end_date: End date string (YYYY-MM-DD) / 结束日期字符串
+            insight_text: Generated insight text / 生成的洞察文本
+            language: Language code / 语言代码
+        """
+        # Generate cache key
+        cache_key_data = f"{patient_id}|{period_type}|{start_date}|{end_date}|{language}"
+        cache_key = hashlib.md5(cache_key_data.encode('utf-8')).hexdigest()
+        
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            INSERT OR REPLACE INTO period_insight_cache
+            (cache_key, patient_id, period_type, start_date, end_date, language, insight_text, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        """, (cache_key, patient_id, period_type, start_date, end_date, language, insight_text))
+        
+        conn.commit()
+        conn.close()
 

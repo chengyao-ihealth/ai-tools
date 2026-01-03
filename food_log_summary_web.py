@@ -370,6 +370,7 @@ HTML_TEMPLATE = """
     <meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1"/>
     <title>食物日志总结生成器</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
         * { box-sizing: border-box; }
         body {
@@ -571,7 +572,22 @@ HTML_TEMPLATE = """
         
         <div class="result-container" id="periodResultContainer" style="margin-top: 20px;">
             <h2 id="periodResultTitle" style="color: #2c3e50; font-size: 24px; margin-bottom: 15px;">生成的洞察</h2>
-            <div id="periodResultText" style="padding: 25px; background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%); border-radius: 12px; border-left: 5px solid #4a90e2; box-shadow: 0 2px 8px rgba(0,0,0,0.1); color: #555; font-size: 15px; line-height: 1.8;"></div>
+            <div id="periodResultText" style="padding: 25px; background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%); border-radius: 12px; border-left: 5px solid #4a90e2; box-shadow: 0 2px 8px rgba(0,0,0,0.1); color: #555; font-size: 15px; line-height: 1.8;">
+                <style>
+                    #periodResultText h1 { font-size: 28px; font-weight: 700; margin-top: 30px; margin-bottom: 15px; color: #2c3e50; }
+                    #periodResultText h2 { font-size: 22px; font-weight: 700; margin-top: 25px; margin-bottom: 12px; color: #2c3e50; }
+                    #periodResultText h3 { font-size: 18px; font-weight: 700; margin-top: 20px; margin-bottom: 10px; color: #2c3e50; }
+                    #periodResultText p { margin: 12px 0; line-height: 1.8; }
+                    #periodResultText ul, #periodResultText ol { margin: 15px 0; padding-left: 30px; line-height: 1.8; }
+                    #periodResultText li { margin: 6px 0; }
+                    #periodResultText strong { font-weight: 700; color: #2c3e50; }
+                    #periodResultText em { font-style: italic; }
+                    #periodResultText code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-family: monospace; font-size: 0.9em; }
+                    #periodResultText pre { background: #f4f4f4; padding: 15px; border-radius: 5px; overflow-x: auto; }
+                    #periodResultText pre code { background: none; padding: 0; }
+                    #periodResultText blockquote { border-left: 4px solid #4a90e2; padding-left: 15px; margin: 15px 0; color: #666; }
+                </style>
+            </div>
         </div>
         
         <div style="margin-top: 30px; padding-top: 30px; border-top: 2px solid #e0e0e0;">
@@ -1024,7 +1040,14 @@ HTML_TEMPLATE = """
                 });
         }
         
-        loadPatientIDs();
+        // Load patient IDs when page loads
+        // 页面加载时加载病人ID
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', loadPatientIDs);
+        } else {
+            // DOM already loaded, call immediately
+            loadPatientIDs();
+        }
         
         // Handle batch cache generation buttons
         // 处理批量生成缓存按钮
@@ -1419,7 +1442,14 @@ HTML_TEMPLATE = """
                     periodError.textContent = data.error;
                     periodError.classList.add('active');
                 } else if (data.insight) {
-                    periodResultText.textContent = data.insight;
+                    // Render markdown to HTML
+                    if (typeof marked !== 'undefined') {
+                        periodResultText.innerHTML = marked.parse(data.insight);
+                    } else {
+                        // Fallback: escape HTML and preserve line breaks
+                        const escaped = data.insight.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                        periodResultText.innerHTML = '<pre style="white-space: pre-wrap; font-family: inherit;">' + escaped + '</pre>';
+                    }
                     periodResultContainer.classList.add('active');
                     if (periodProgress) {
                         periodProgress.textContent = '';
@@ -1484,7 +1514,14 @@ HTML_TEMPLATE = """
                     periodError.textContent = data.error;
                     periodError.classList.add('active');
                 } else if (data.insight) {
-                    periodResultText.textContent = data.insight;
+                    // Render markdown to HTML
+                    if (typeof marked !== 'undefined') {
+                        periodResultText.innerHTML = marked.parse(data.insight);
+                    } else {
+                        // Fallback: escape HTML and preserve line breaks
+                        const escaped = data.insight.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                        periodResultText.innerHTML = '<pre style="white-space: pre-wrap; font-family: inherit;">' + escaped + '</pre>';
+                    }
                     periodResultContainer.classList.add('active');
                     if (periodProgress) {
                         periodProgress.textContent = '';

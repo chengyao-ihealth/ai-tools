@@ -2423,6 +2423,26 @@ def generate_weekly_or_monthly_insight(
     try:
         print(f"[INFO] Generating {period_type} insight for patient {patient_id} from {start_date} to {end_date}")
         
+        # Check cache first
+        # 首先检查缓存
+        if cache_db:
+            start_date_str = start_date.strftime('%Y-%m-%d') if hasattr(start_date, 'strftime') else str(start_date)
+            end_date_str = end_date.strftime('%Y-%m-%d') if hasattr(end_date, 'strftime') else str(end_date)
+            
+            cached_insight = cache_db.get_period_insight_cache(
+                patient_id=patient_id,
+                period_type=period_type,
+                start_date=start_date_str,
+                end_date=end_date_str,
+                language=language
+            )
+            
+            if cached_insight:
+                print(f"[INFO] ✓ Using cached {period_type} insight for patient {patient_id} ({start_date_str} to {end_date_str})")
+                return cached_insight
+            else:
+                print(f"[INFO] ✗ Cache miss, generating new {period_type} insight for patient {patient_id} ({start_date_str} to {end_date_str})")
+        
         # Use the existing daily summary generation logic (which queries DB and uses cache)
         # 使用现有的daily summary生成逻辑（会查询数据库并使用缓存）
         from query_food_logs import query_food_logs
@@ -2639,6 +2659,21 @@ def generate_weekly_or_monthly_insight(
             
             insight_text = response.choices[0].message.content
             print(f"[INFO] Generated {period_type} insight: {len(insight_text)} characters")
+            
+            # Save to cache
+            # 保存到缓存
+            if cache_db and insight_text:
+                start_date_str = start_date.strftime('%Y-%m-%d') if hasattr(start_date, 'strftime') else str(start_date)
+                end_date_str = end_date.strftime('%Y-%m-%d') if hasattr(end_date, 'strftime') else str(end_date)
+                cache_db.save_period_insight_cache(
+                    patient_id=patient_id,
+                    period_type=period_type,
+                    start_date=start_date_str,
+                    end_date=end_date_str,
+                    insight_text=insight_text,
+                    language=language
+                )
+                print(f"[INFO] Saved {period_type} insight to cache")
             
             return insight_text
         except Exception as e:
