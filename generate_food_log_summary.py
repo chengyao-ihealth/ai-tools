@@ -2421,13 +2421,16 @@ def generate_weekly_or_monthly_insight(
         return None
     
     try:
+        print(f"[INFO] Generating {period_type} insight for patient {patient_id} from {start_date} to {end_date}")
+        
+        # Use the existing daily summary generation logic (which queries DB and uses cache)
+        # 使用现有的daily summary生成逻辑（会查询数据库并使用缓存）
+        from query_food_logs import query_food_logs
+        
         # Get MongoDB client
         client = get_mongo_client()
-        database = client["UnifiedCare"]
-        food_logs_collection = database["food_logs"]
         
-        # Query food logs for the period
-        # Handle timezone-aware datetime
+        # Handle timezone-aware datetime for query
         if start_date.tzinfo is None:
             start_date_pt = pytz.timezone("America/Los_Angeles").localize(start_date)
         else:
@@ -2438,29 +2441,38 @@ def generate_weekly_or_monthly_insight(
         else:
             end_date_pt = end_date.astimezone(pytz.timezone("America/Los_Angeles"))
         
-        query_filter = {
-            "patientId": patient_id,
-            "createdAt": {
-                "$gte": start_date_pt,
-                "$lte": end_date_pt
-            }
-        }
+        # Convert to UTC for MongoDB query (as query_food_logs expects)
+        start_date_utc = start_date_pt.astimezone(pytz.utc).replace(tzinfo=None)
+        end_date_utc = end_date_pt.astimezone(pytz.utc).replace(tzinfo=None)
         
-        cursor = food_logs_collection.find(query_filter).sort("createdAt", 1)
-        food_logs_df = pd.DataFrame(list(cursor))
+        print(f"[INFO] Querying food logs from {start_date_utc} to {end_date_utc}")
+        
+        # Query food logs using existing function
+        food_logs_df = query_food_logs(
+            client,
+            [patient_id],
+            database_name="UnifiedCare",
+            start_date=start_date_utc,
+            end_date=end_date_utc
+        )
+        
+        print(f"[INFO] Found {len(food_logs_df)} food logs for the period")
         
         if food_logs_df.empty:
-            if debug:
-                print(f"[DEBUG] No food logs found for period {start_date} to {end_date}")
+            print(f"[WARN] No food logs found for period {start_date} to {end_date}")
             return None
         
         # Get image URLs for all food logs first
         if session_token:
+            print(f"[INFO] Fetching image URLs for {len(food_logs_df)} food logs...")
             food_logs_df, _ = get_food_log_image_urls(
                 food_logs_df,
                 session_token,
                 debug=debug
             )
+            print(f"[INFO] Image URLs fetched")
+        else:
+            print(f"[WARN] No session token provided, skipping image URL fetch")
         
         # Group by date and generate daily summaries
         daily_summaries = []
@@ -2501,7 +2513,7 @@ def generate_weekly_or_monthly_insight(
             # Generate AI summaries for each meal if not cached
             daily_meal_summaries = []
             for meal_type, logs in food_logs_by_meal.items():
-                for _, row in logs:
+                for row in logs:
                     # Get image URLs from row (already fetched above)
                     image_urls = row.get("ImageURLs")
                     if not image_urls or not isinstance(image_urls, list):
@@ -2550,9 +2562,10 @@ def generate_weekly_or_monthly_insight(
                     'summaries': daily_meal_summaries
                 })
         
+        print(f"[INFO] Generated {len(daily_summaries)} daily summaries")
+        
         if not daily_summaries:
-            if debug:
-                print("[DEBUG] No daily summaries generated")
+            print("[WARN] No daily summaries generated")
             return None
         
         # Format summary text for prompt
@@ -2581,49 +2594,64 @@ def generate_weekly_or_monthly_insight(
             return None
         
         # Format prompt
-        prompt_text = prompt_template.format(
-            patient_id=patient_info.get('patient_id', patient_id),
-            age=patient_info.get('age', 'N/A'),
-            gender=patient_info.get('gender', 'N/A'),
-            weight=patient_info.get('weight_kg', 'N/A'),
-            height=patient_info.get('height_cm', 'N/A'),
-            bmi=patient_info.get('bmi', 'N/A'),
-            medical_history=patient_info.get('medical_history', 'N/A'),
-            diagnoses=patient_info.get('diagnoses', 'N/A'),
-            medications=patient_info.get('medications', 'N/A'),
-            lab_results=patient_info.get('lab_results', 'N/A'),
-            start_date=start_date.strftime('%Y-%m-%d'),
-            end_date=end_date.strftime('%Y-%m-%d'),
-            weekly_summary=summary_text if period_type == 'weekly' else '',
-            monthly_summary=summary_text if period_type == 'monthly' else ''
-        )
+        try:
+            start_date_str = start_date.strftime('%Y-%m-%d') if hasattr(start_date, 'strftime') else str(start_date)
+            end_date_str = end_date.strftime('%Y-%m-%d') if hasattr(end_date, 'strftime') else str(end_date)
+            prompt_text = prompt_template.format(
+                patient_id=patient_info.get('patient_id', patient_id),
+                age=patient_info.get('age', 'N/A'),
+                gender=patient_info.get('gender', 'N/A'),
+                weight=patient_info.get('weight_kg', 'N/A'),
+                height=patient_info.get('height_cm', 'N/A'),
+                bmi=patient_info.get('bmi', 'N/A'),
+                medical_history=patient_info.get('medical_history', 'N/A'),
+                diagnoses=patient_info.get('diagnoses', 'N/A'),
+                medications=patient_info.get('medications', 'N/A'),
+                lab_results=patient_info.get('lab_results', 'N/A'),
+                start_date=start_date_str,
+                end_date=end_date_str,
+                weekly_summary=summary_text if period_type == 'weekly' else '',
+                monthly_summary=summary_text if period_type == 'monthly' else ''
+            )
+            print(f"[INFO] Prompt formatted successfully, length: {len(prompt_text)}")
+        except Exception as e:
+            print(f"[ERROR] Failed to format prompt: {e}")
+            if debug:
+                import traceback
+                traceback.print_exc()
+            return None
         
         # Call OpenAI
-        client = OpenAI(api_key=api_key)
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt_text
-                }
-            ],
-            max_tokens=2000,
-            temperature=0.7
-        )
-        
-        insight_text = response.choices[0].message.content
-        
-        if debug:
-            print(f"[DEBUG] Generated {period_type} insight: {len(insight_text)} characters")
-        
-        return insight_text
+        print(f"[INFO] Calling OpenAI API to generate {period_type} insight...")
+        try:
+            client = OpenAI(api_key=api_key)
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": prompt_text
+                    }
+                ],
+                max_tokens=2000,
+                temperature=0.7
+            )
+            
+            insight_text = response.choices[0].message.content
+            print(f"[INFO] Generated {period_type} insight: {len(insight_text)} characters")
+            
+            return insight_text
+        except Exception as e:
+            print(f"[ERROR] OpenAI API call failed: {e}")
+            if debug:
+                import traceback
+                traceback.print_exc()
+            return None
         
     except Exception as e:
-        if debug:
-            print(f"[DEBUG] Failed to generate {period_type} insight: {e}")
-            import traceback
-            traceback.print_exc()
+        print(f"[ERROR] Error generating {period_type} insight: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 

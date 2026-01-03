@@ -412,6 +412,45 @@ class CacheDB:
         conn.commit()
         conn.close()
     
+    def get_ai_summaries_by_food_log_ids(self, food_log_ids: list) -> Dict[str, Dict[str, Any]]:
+        """
+        Get all cached AI summaries for a list of food log IDs.
+        获取指定food log IDs列表的所有缓存AI summaries。
+        
+        Args:
+            food_log_ids: List of food log IDs / Food log ID列表
+            
+        Returns:
+            Dict mapping food_log_id to list of summary dicts / 映射food_log_id到summary列表的字典
+        """
+        if not food_log_ids:
+            return {}
+        
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        
+        placeholders = ','.join(['?'] * len(food_log_ids))
+        
+        cursor.execute(f"""
+            SELECT food_log_id, summary_json
+            FROM ai_summary_cache
+            WHERE food_log_id IN ({placeholders}) AND food_log_id IS NOT NULL
+        """, food_log_ids)
+        
+        results = {}
+        for row in cursor.fetchall():
+            food_log_id, summary_json = row
+            try:
+                summary = json.loads(summary_json)
+                if food_log_id not in results:
+                    results[food_log_id] = []
+                results[food_log_id].append(summary)
+            except json.JSONDecodeError:
+                continue
+        
+        conn.close()
+        return results
+    
     def check_patient_cache_status(self, food_log_ids: list) -> Dict[str, Any]:
         """
         Check cache status for a list of food log IDs.
