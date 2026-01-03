@@ -515,7 +515,7 @@ HTML_TEMPLATE = """
             <div class="form-group">
                 <label for="patientSelect" id="patientLabel">选择病人 ID:</label>
                 <select id="patientSelect" name="patient_id" required>
-                    <option value="">加载中...</option>
+                    <option value="" id="loadingOption">加载中...</option>
                 </select>
                 <div class="patient-info-display" id="patientInfo" style="display: none;">
                     <div id="foodLogCountLabel">食物日志数量: <span id="foodLogCount">-</span></div>
@@ -549,7 +549,7 @@ HTML_TEMPLATE = """
             </div>
             
             <div style="margin-top: 20px; margin-bottom: 15px;">
-                <h3 id="nutritionInsightsTitle" style="margin: 0; color: #2c3e50; font-size: 20px; font-weight: 600;">生成营养洞察 / Generate Nutrition Insights</h3>
+                <h3 id="nutritionInsightsTitle" style="margin: 0; color: #2c3e50; font-size: 20px; font-weight: 600;">生成营养洞察</h3>
             </div>
             <div style="display: flex; gap: 15px; align-items: flex-start; flex-wrap: wrap;">
                 <button type="submit" id="generateBtn">Daily Summary</button>
@@ -591,7 +591,7 @@ HTML_TEMPLATE = """
         </div>
         
         <div style="margin-top: 30px; padding-top: 30px; border-top: 2px solid #e0e0e0;">
-            <h3 id="batchCacheTitle" style="margin-top: 0; color: #2c3e50;">批量生成缓存 / Batch Cache Generation</h3>
+            <h3 id="batchCacheTitle" style="margin-top: 0; color: #2c3e50;">批量生成缓存</h3>
             <p id="batchCacheDesc" style="color: #666; margin-bottom: 20px;">为多个病人批量生成图片和AI摘要缓存，提高后续查询速度</p>
             
             <div style="display: flex; gap: 15px; flex-wrap: wrap;">
@@ -649,7 +649,7 @@ HTML_TEMPLATE = """
                 errorSelect: '请选择病人 ID 和日期',
                 records: '条记录',
                 debugMode: 'Debug模式（显示数据结构）',
-                batchCacheTitle: '批量生成缓存 / Batch Cache Generation',
+                batchCacheTitle: '批量生成缓存',
                 batchCacheDesc: '为多个病人批量生成图片和AI摘要缓存，提高后续查询速度',
                 generateCurrentCache: '生成当前病人缓存',
                 generateActiveCache: '生成活跃病人缓存',
@@ -676,8 +676,9 @@ HTML_TEMPLATE = """
                 periodError: '生成洞察失败',
                 periodResultTitle: '生成的洞察',
                 selectPatientForPeriod: '请先选择病人ID',
-                nutritionInsightsTitle: '生成营养洞察 / Generate Nutrition Insights',
-                dailySummary: 'Daily Summary'
+                nutritionInsightsTitle: '生成营养洞察',
+                dailySummary: 'Daily Summary',
+                noData: '暂无数据'
             },
             en: {
                 title: 'Food Log Summary Generator',
@@ -726,7 +727,8 @@ HTML_TEMPLATE = """
                 periodResultTitle: 'Generated Insights',
                 selectPatientForPeriod: 'Please select Patient ID first',
                 nutritionInsightsTitle: 'Generate Nutrition Insights',
-                dailySummary: 'Daily Summary'
+                dailySummary: 'Daily Summary',
+                noData: 'No data'
             }
         };
         
@@ -749,6 +751,10 @@ HTML_TEMPLATE = """
             if (nutritionInsightsTitle) nutritionInsightsTitle.textContent = t.nutritionInsightsTitle;
             document.getElementById('loadingText').textContent = t.loading;
             document.getElementById('resultTitle').textContent = t.resultTitle;
+            
+            // Update loading option in patient select
+            const loadingOption = document.getElementById('loadingOption');
+            if (loadingOption) loadingOption.textContent = t.loadingText;
             
             // Update cache generation section
             // 更新缓存生成部分
@@ -874,11 +880,13 @@ HTML_TEMPLATE = """
                                     });
                                     topDaysList.innerHTML = html;
                                 } else {
-                                    const noDataText = currentLang === 'zh' ? '暂无数据' : 'No data';
+                                    const t = translations[currentLang];
+                                    const noDataText = t.noData;
                                     topDaysList.innerHTML = `<div style="color: #999;">${noDataText}</div>`;
                                 }
                             } catch (e) {
-                                const noDataText = currentLang === 'zh' ? '暂无数据' : 'No data';
+                                const t = translations[currentLang];
+                                const noDataText = t.noData;
                                 topDaysList.innerHTML = `<div style="color: #999;">${noDataText}</div>`;
                             }
                         }
@@ -1013,11 +1021,11 @@ HTML_TEMPLATE = """
                                     });
                                     topDaysList.innerHTML = html;
                                 } else {
-                                    const noDataText = currentLang === 'zh' ? '暂无数据' : 'No data';
+                                    const noDataText = t.noData;
                                     topDaysList.innerHTML = `<div style="color: #999;">${noDataText}</div>`;
                                 }
                             } catch (e) {
-                                const noDataText = currentLang === 'zh' ? '暂无数据' : 'No data';
+                                const noDataText = t.noData;
                                 topDaysList.innerHTML = `<div style="color: #999;">${noDataText}</div>`;
                             }
                             
@@ -2392,7 +2400,34 @@ def care_note_detail(patient_id, note_id):
 
 
 if __name__ == '__main__':
-    port = int(os.getenv('PORT', 5000))
+    import socket
+    
+    def is_port_available(port):
+        """Check if a port is available."""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(('0.0.0.0', port))
+                return True
+            except OSError:
+                return False
+    
+    def find_available_port(start_port, max_attempts=100):
+        """Find an available port starting from start_port."""
+        for i in range(max_attempts):
+            port = start_port + i
+            if is_port_available(port):
+                return port
+        raise RuntimeError(f"Could not find an available port after {max_attempts} attempts")
+    
+    default_port = int(os.getenv('PORT', 5000))
     debug = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
+    
+    # Try to find an available port
+    port = find_available_port(default_port)
+    
+    if port != default_port:
+        print(f"[INFO] Port {default_port} is in use, using port {port} instead")
+    
+    print(f"[INFO] Starting server on http://0.0.0.0:{port}")
     app.run(host='0.0.0.0', port=port, debug=debug)
 
