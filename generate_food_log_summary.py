@@ -2661,6 +2661,13 @@ def generate_weekly_or_monthly_insight(
                 traceback.print_exc()
             return None
         
+        # Add language instruction to prompt
+        # 在 prompt 中添加语言指令
+        if language == 'zh':
+            prompt_text += "\n\nPlease respond in Chinese (Simplified)."
+        else:
+            prompt_text += "\n\nPlease respond in English."
+        
         # Call OpenAI
         print(f"[INFO] Calling OpenAI API to generate {period_type} insight...")
         try:
