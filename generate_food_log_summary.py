@@ -2425,23 +2425,26 @@ def generate_weekly_or_monthly_insight(
         
         # Check cache first
         # 首先检查缓存
+        # Cache is based on query date (end_date), not date range
+        # 缓存基于查询日期（end_date），而不是日期范围
         if cache_db:
             start_date_str = start_date.strftime('%Y-%m-%d') if hasattr(start_date, 'strftime') else str(start_date)
             end_date_str = end_date.strftime('%Y-%m-%d') if hasattr(end_date, 'strftime') else str(end_date)
             
+            # Cache key is based on end_date (query date) only
+            # 缓存键仅基于 end_date（查询日期）
             cached_insight = cache_db.get_period_insight_cache(
                 patient_id=patient_id,
                 period_type=period_type,
-                start_date=start_date_str,
                 end_date=end_date_str,
                 language=language
             )
             
             if cached_insight:
-                print(f"[INFO] ✓ Using cached {period_type} insight for patient {patient_id} ({start_date_str} to {end_date_str})")
+                print(f"[INFO] ✓ Using cached {period_type} insight for patient {patient_id} (query date: {end_date_str})")
                 return cached_insight
             else:
-                print(f"[INFO] ✗ Cache miss, generating new {period_type} insight for patient {patient_id} ({start_date_str} to {end_date_str})")
+                print(f"[INFO] ✗ Cache miss, generating new {period_type} insight for patient {patient_id} (query date: {end_date_str}, period: {start_date_str} to {end_date_str})")
         
         # Use the existing daily summary generation logic (which queries DB and uses cache)
         # 使用现有的daily summary生成逻辑（会查询数据库并使用缓存）
@@ -2662,18 +2665,20 @@ def generate_weekly_or_monthly_insight(
             
             # Save to cache
             # 保存到缓存
+            # Cache is based on query date (end_date) only
+            # 缓存仅基于查询日期（end_date）
             if cache_db and insight_text:
                 start_date_str = start_date.strftime('%Y-%m-%d') if hasattr(start_date, 'strftime') else str(start_date)
                 end_date_str = end_date.strftime('%Y-%m-%d') if hasattr(end_date, 'strftime') else str(end_date)
                 cache_db.save_period_insight_cache(
                     patient_id=patient_id,
                     period_type=period_type,
-                    start_date=start_date_str,
                     end_date=end_date_str,
                     insight_text=insight_text,
-                    language=language
+                    language=language,
+                    start_date=start_date_str  # Stored for reference but not used in cache key
                 )
-                print(f"[INFO] Saved {period_type} insight to cache")
+                print(f"[INFO] Saved {period_type} insight to cache (query date: {end_date_str})")
             
             return insight_text
         except Exception as e:

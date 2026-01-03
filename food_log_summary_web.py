@@ -1407,9 +1407,15 @@ HTML_TEMPLATE = """
         document.getElementById('generateWeeklyBtn').addEventListener('click', async function() {
             const t = translations[currentLang];
             const patientId = document.getElementById('patientSelect').value;
+            const selectedDate = document.getElementById('dateSelect').value;
             
             if (!patientId) {
                 alert(t.selectPatientForPeriod);
+                return;
+            }
+            
+            if (!selectedDate) {
+                alert(currentLang === 'zh' ? '请选择日期' : 'Please select a date');
                 return;
             }
             
@@ -1436,6 +1442,7 @@ HTML_TEMPLATE = """
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
                         patient_id: patientId,
+                        date: selectedDate,
                         language: currentLang
                     })
                 });
@@ -1479,9 +1486,15 @@ HTML_TEMPLATE = """
         document.getElementById('generateMonthlyBtn').addEventListener('click', async function() {
             const t = translations[currentLang];
             const patientId = document.getElementById('patientSelect').value;
+            const selectedDate = document.getElementById('dateSelect').value;
             
             if (!patientId) {
                 alert(t.selectPatientForPeriod);
+                return;
+            }
+            
+            if (!selectedDate) {
+                alert(currentLang === 'zh' ? '请选择日期' : 'Please select a date');
                 return;
             }
             
@@ -1508,6 +1521,7 @@ HTML_TEMPLATE = """
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
                         patient_id: patientId,
+                        date: selectedDate,
                         language: currentLang
                     })
                 });
@@ -2137,10 +2151,14 @@ def api_generate_weekly_insight():
     try:
         data = request.json
         patient_id = data.get('patient_id')
+        date_str = data.get('date')  # User selected date
         language = data.get('language', 'zh')
         
         if not patient_id:
             return jsonify({"error": "Patient ID is required"}), 400
+        
+        if not date_str:
+            return jsonify({"error": "Date is required"}), 400
         
         if not OPENAI_API_KEY:
             return jsonify({"error": "OPENAI_API_KEY not configured"}), 500
@@ -2150,10 +2168,16 @@ def api_generate_weekly_insight():
         patient_info = get_patient_info(client, patient_id)
         client.close()
         
-        # Calculate date range (past 7 days)
+        # Parse user selected date and calculate date range (past 7 days from selected date)
         import pytz
-        end_date = datetime.now(pytz.timezone("America/Los_Angeles"))
-        start_date = end_date - timedelta(days=7)
+        try:
+            selected_date = datetime.strptime(date_str, "%Y-%m-%d")
+            pt_timezone = pytz.timezone("America/Los_Angeles")
+            # Use selected date as end_date (end of day)
+            end_date = pt_timezone.localize(selected_date.replace(hour=23, minute=59, second=59, microsecond=999999))
+            start_date = end_date - timedelta(days=7)
+        except ValueError:
+            return jsonify({"error": "Invalid date format. Use YYYY-MM-DD"}), 400
         
         # Generate insight
         cache_db = CacheDB(db_path=Path("./cache.db")) if CacheDB else None
@@ -2187,10 +2211,14 @@ def api_generate_monthly_insight():
     try:
         data = request.json
         patient_id = data.get('patient_id')
+        date_str = data.get('date')  # User selected date
         language = data.get('language', 'zh')
         
         if not patient_id:
             return jsonify({"error": "Patient ID is required"}), 400
+        
+        if not date_str:
+            return jsonify({"error": "Date is required"}), 400
         
         if not OPENAI_API_KEY:
             return jsonify({"error": "OPENAI_API_KEY not configured"}), 500
@@ -2200,10 +2228,16 @@ def api_generate_monthly_insight():
         patient_info = get_patient_info(client, patient_id)
         client.close()
         
-        # Calculate date range (past 30 days)
+        # Parse user selected date and calculate date range (past 30 days from selected date)
         import pytz
-        end_date = datetime.now(pytz.timezone("America/Los_Angeles"))
-        start_date = end_date - timedelta(days=30)
+        try:
+            selected_date = datetime.strptime(date_str, "%Y-%m-%d")
+            pt_timezone = pytz.timezone("America/Los_Angeles")
+            # Use selected date as end_date (end of day)
+            end_date = pt_timezone.localize(selected_date.replace(hour=23, minute=59, second=59, microsecond=999999))
+            start_date = end_date - timedelta(days=30)
+        except ValueError:
+            return jsonify({"error": "Invalid date format. Use YYYY-MM-DD"}), 400
         
         # Generate insight
         cache_db = CacheDB(db_path=Path("./cache.db")) if CacheDB else None

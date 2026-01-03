@@ -133,6 +133,8 @@ class CacheDB:
         
         # Period insight cache table (weekly/monthly insights)
         # 周期洞察缓存表（周/月洞察）
+        # Cache is based on query date (end_date), not date range
+        # 缓存基于查询日期（end_date），而不是日期范围
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS period_insight_cache (
                 cache_key TEXT PRIMARY KEY,
@@ -143,7 +145,7 @@ class CacheDB:
                 language TEXT NOT NULL,
                 insight_text TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(patient_id, period_type, start_date, end_date, language)
+                UNIQUE(patient_id, period_type, end_date, language)
             )
         """)
         
@@ -564,7 +566,19 @@ class CacheDB:
         
         cursor.execute("DELETE FROM image_cache")
         cursor.execute("DELETE FROM ai_summary_cache")
+        cursor.execute("DELETE FROM period_insight_cache")
         
+        conn.commit()
+        conn.close()
+    
+    def clear_period_insight_cache(self):
+        """
+        Clear all period insight cache entries (weekly and monthly).
+        清空所有周期洞察缓存条目（周和月）。
+        """
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM period_insight_cache")
         conn.commit()
         conn.close()
     
@@ -607,20 +621,24 @@ class CacheDB:
         self,
         patient_id: str,
         period_type: str,  # 'weekly' or 'monthly'
-        start_date: str,
-        end_date: str,
-        language: str = 'zh'
+        end_date: str,  # Query date (YYYY-MM-DD) - cache is based on this date
+        language: str = 'zh',
+        start_date: Optional[str] = None  # Kept for backward compatibility, not used in cache key
     ) -> Optional[str]:
         """
         Get cached period insight.
         获取缓存的周期洞察。
         
+        Cache is based on the query date (end_date), not the date range.
+        This ensures that each day has its own cache entry.
+        缓存基于查询日期（end_date），而不是日期范围。这确保每一天都有自己的缓存条目。
+        
         Args:
             patient_id: Patient ID / 病人ID
             period_type: 'weekly' or 'monthly' / 'weekly' 或 'monthly'
-            start_date: Start date string (YYYY-MM-DD) / 开始日期字符串
-            end_date: End date string (YYYY-MM-DD) / 结束日期字符串
+            end_date: Query date string (YYYY-MM-DD) / 查询日期字符串（YYYY-MM-DD）
             language: Language code / 语言代码
+            start_date: Start date (deprecated, kept for compatibility) / 开始日期（已弃用，保留以兼容）
             
         Returns:
             Cached insight text or None / 缓存的洞察文本或None
@@ -628,11 +646,13 @@ class CacheDB:
         conn = sqlite3.connect(str(self.db_path))
         cursor = conn.cursor()
         
+        # Cache key is based on patient_id, period_type, end_date (query date), and language
+        # 缓存键基于 patient_id, period_type, end_date（查询日期）和 language
         cursor.execute("""
             SELECT insight_text, created_at
             FROM period_insight_cache
-            WHERE patient_id = ? AND period_type = ? AND start_date = ? AND end_date = ? AND language = ?
-        """, (patient_id, period_type, start_date, end_date, language))
+            WHERE patient_id = ? AND period_type = ? AND end_date = ? AND language = ?
+        """, (patient_id, period_type, end_date, language))
         
         row = cursor.fetchone()
         conn.close()
@@ -647,26 +667,36 @@ class CacheDB:
         self,
         patient_id: str,
         period_type: str,  # 'weekly' or 'monthly'
-        start_date: str,
-        end_date: str,
+        end_date: str,  # Query date (YYYY-MM-DD) - cache is based on this date
         insight_text: str,
-        language: str = 'zh'
+        language: str = 'zh',
+        start_date: Optional[str] = None  # Kept for backward compatibility, stored but not used in cache key
     ):
         """
         Save period insight to cache.
         保存周期洞察到缓存。
         
+        Cache is based on the query date (end_date), not the date range.
+        This ensures that each day has its own cache entry.
+        缓存基于查询日期（end_date），而不是日期范围。这确保每一天都有自己的缓存条目。
+        
         Args:
             patient_id: Patient ID / 病人ID
             period_type: 'weekly' or 'monthly' / 'weekly' 或 'monthly'
-            start_date: Start date string (YYYY-MM-DD) / 开始日期字符串
-            end_date: End date string (YYYY-MM-DD) / 结束日期字符串
+            end_date: Query date string (YYYY-MM-DD) / 查询日期字符串（YYYY-MM-DD）
             insight_text: Generated insight text / 生成的洞察文本
             language: Language code / 语言代码
+            start_date: Start date (deprecated, stored for reference) / 开始日期（已弃用，存储以供参考）
         """
-        # Generate cache key
-        cache_key_data = f"{patient_id}|{period_type}|{start_date}|{end_date}|{language}"
+        # Generate cache key based on patient_id, period_type, end_date (query date), and language
+        # 基于 patient_id, period_type, end_date（查询日期）和 language 生成缓存键
+        cache_key_data = f"{patient_id}|{period_type}|{end_date}|{language}"
         cache_key = hashlib.md5(cache_key_data.encode('utf-8')).hexdigest()
+        
+        # Use end_date as start_date if not provided (for backward compatibility)
+        # 如果未提供 start_date，则使用 end_date（向后兼容）
+        if start_date is None:
+            start_date = end_date
         
         conn = sqlite3.connect(str(self.db_path))
         cursor = conn.cursor()
