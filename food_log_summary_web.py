@@ -548,16 +548,23 @@ HTML_TEMPLATE = """
                 </label>
             </div>
             
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="regenerateCheckbox" name="regenerate"/>
+                    <span id="regenerateLabel">重新生成（更新缓存） / Regenerate (Update Cache)</span>
+                </label>
+            </div>
+            
             <div style="margin-top: 20px; margin-bottom: 15px;">
                 <h3 id="nutritionInsightsTitle" style="margin: 0; color: #2c3e50; font-size: 20px; font-weight: 600;">生成营养洞察</h3>
             </div>
             <div style="display: flex; gap: 15px; align-items: flex-start; flex-wrap: wrap;">
-                <button type="submit" id="generateBtn">Daily Summary</button>
+                <button type="submit" id="generateBtn">每日总结</button>
                 <button type="button" id="generateWeeklyBtn" style="background: #4a90e2;">
-                    <span id="generateWeeklyText">Weekly Insights</span>
+                    <span id="generateWeeklyText">周洞察</span>
                 </button>
                 <button type="button" id="generateMonthlyBtn" style="background: #4a90e2;">
-                    <span id="generateMonthlyText">Monthly Insights</span>
+                    <span id="generateMonthlyText">月洞察</span>
                 </button>
             </div>
         </form>
@@ -670,14 +677,15 @@ HTML_TEMPLATE = """
                 completedPatient: '已完成 {current}/{total}: {id} ({images} 图片, {summaries} 摘要)',
                 skippedPatient: '跳过 {id} ({current}/{total})',
                 finalSummary: '完成！处理了 {processed}/{total} 个病人，生成了 {images} 张图片缓存和 {summaries} 个AI摘要缓存。',
-                generateWeekly: 'Weekly Insights',
-                generateMonthly: 'Monthly Insights',
+                generateWeekly: '周洞察',
+                generateMonthly: '月洞察',
                 periodLoading: '正在生成洞察，请稍候...',
                 periodError: '生成洞察失败',
                 periodResultTitle: '生成的洞察',
                 selectPatientForPeriod: '请先选择病人ID',
                 nutritionInsightsTitle: '生成营养洞察',
-                dailySummary: 'Daily Summary',
+                dailySummary: '每日总结',
+                regenerateLabel: '重新生成（更新缓存）',
                 noData: '暂无数据'
             },
             en: {
@@ -699,6 +707,7 @@ HTML_TEMPLATE = """
                 errorSelect: 'Please select Patient ID and Date',
                 records: ' records',
                 debugMode: 'Debug Mode (Show Raw API Data)',
+                regenerateLabel: 'Regenerate (Update Cache)',
                 batchCacheTitle: 'Batch Cache Generation',
                 batchCacheDesc: 'Batch generate image and AI summary cache for multiple patients to improve query speed',
                 generateCurrentCache: 'Generate Current Patient Cache',
@@ -728,6 +737,7 @@ HTML_TEMPLATE = """
                 selectPatientForPeriod: 'Please select Patient ID first',
                 nutritionInsightsTitle: 'Generate Nutrition Insights',
                 dailySummary: 'Daily Summary',
+                regenerateLabel: 'Regenerate (Update Cache)',
                 noData: 'No data'
             }
         };
@@ -744,6 +754,8 @@ HTML_TEMPLATE = """
             document.getElementById('patientLabel').textContent = t.selectPatient;
             document.getElementById('dateLabel').textContent = t.selectDate;
             document.getElementById('debugLabel').textContent = t.debugMode;
+            const regenerateLabelEl = document.getElementById('regenerateLabel');
+            if (regenerateLabelEl) regenerateLabelEl.textContent = t.regenerateLabel;
             document.getElementById('generateBtn').textContent = t.dailySummary;
             
             // Update nutrition insights title
@@ -827,8 +839,25 @@ HTML_TEMPLATE = """
                     this.classList.add('active');
                     
                     updateLanguage(lang);
-                    // Reload patient IDs to update text
-                    loadPatientIDs();
+                    // Update patient list text without reloading
+                    // 更新病人列表文本而不重新加载
+                    const select = document.getElementById('patientSelect');
+                    if (select && select.options.length > 0) {
+                        const t = translations[lang];
+                        // Update the first option (loading/please select)
+                        const firstOption = select.options[0];
+                        if (firstOption && firstOption.value === '') {
+                            firstOption.textContent = t.pleaseSelect;
+                        }
+                        // Update other options to show language-appropriate text
+                        for (let i = 1; i < select.options.length; i++) {
+                            const option = select.options[i];
+                            if (option.value) {
+                                const count = option.dataset.count || '0';
+                                option.textContent = `${option.value} (${count} ${t.records})`;
+                            }
+                        }
+                    }
                     
                     // Reload patient info if selected
                     const patientId = document.getElementById('patientSelect').value;
@@ -1302,6 +1331,7 @@ HTML_TEMPLATE = """
             
             try {
                 const debugMode = document.getElementById('debugCheckbox').checked;
+                const regenerate = document.getElementById('regenerateCheckbox').checked;
                 const response = await fetch('/api/generate-summary', {
                     method: 'POST',
                     headers: {
@@ -1311,7 +1341,8 @@ HTML_TEMPLATE = """
                     patient_id: patientId,
                     date: date,
                     language: currentLang,
-                    debug: debugMode
+                    debug: debugMode,
+                    regenerate: regenerate
                     })
                 });
                 
@@ -1516,13 +1547,15 @@ HTML_TEMPLATE = """
                     periodProgress.textContent = t.periodLoading;
                 }
                 
+                const regenerate = document.getElementById('regenerateCheckbox').checked;
                 const response = await fetch('/api/generate-monthly-insight', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
                         patient_id: patientId,
                         date: selectedDate,
-                        language: currentLang
+                        language: currentLang,
+                        regenerate: regenerate
                     })
                 });
                 
@@ -1606,6 +1639,7 @@ def api_generate_summary():
         date_str = data.get('date')
         language = data.get('language', 'zh')  # Default to Chinese
         debug = data.get('debug', False)
+        regenerate = data.get('regenerate', False)  # Regenerate AI content and update cache
         
         if not patient_id or not date_str:
             return jsonify({"error": "Missing patient_id or date"}), 400
@@ -1762,6 +1796,7 @@ def api_generate_summary():
                                         patient_id=patient_id,
                                         date=food_log_date,
                                         cache_db=cache_db,
+                                        regenerate=regenerate,
                                         debug=debug
                                     )
                                     if summary:
@@ -2073,6 +2108,7 @@ def _generate_cache_for_patient_internal(patient_id: str, check_criteria: bool =
                         patient_id=patient_id,
                         date=food_log_date,
                         cache_db=cache_db,
+                        regenerate=False,  # Batch cache generation doesn't regenerate
                         debug=False
                     )
                     if summary:
@@ -2153,6 +2189,7 @@ def api_generate_weekly_insight():
         patient_id = data.get('patient_id')
         date_str = data.get('date')  # User selected date
         language = data.get('language', 'zh')
+        regenerate = data.get('regenerate', False)  # Regenerate AI content and update cache
         
         if not patient_id:
             return jsonify({"error": "Patient ID is required"}), 400
@@ -2191,6 +2228,7 @@ def api_generate_weekly_insight():
             language=language,
             cache_db=cache_db,
             session_token=SESSION_TOKEN,
+            regenerate=regenerate,
             debug=False
         )
         
@@ -2213,6 +2251,7 @@ def api_generate_monthly_insight():
         patient_id = data.get('patient_id')
         date_str = data.get('date')  # User selected date
         language = data.get('language', 'zh')
+        regenerate = data.get('regenerate', False)  # Regenerate AI content and update cache
         
         if not patient_id:
             return jsonify({"error": "Patient ID is required"}), 400
@@ -2251,6 +2290,7 @@ def api_generate_monthly_insight():
             language=language,
             cache_db=cache_db,
             session_token=SESSION_TOKEN,
+            regenerate=regenerate,
             debug=False
         )
         

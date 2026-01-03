@@ -942,6 +942,7 @@ def analyze_food_image_with_openai(
     patient_id: Optional[str] = None,
     date: Optional[str] = None,
     cache_db: Optional[CacheDB] = None,
+    regenerate: bool = False,
     debug: bool = False
 ) -> Optional[Dict[str, Any]]:
     """
@@ -970,9 +971,9 @@ def analyze_food_image_with_openai(
     if patient_notes is not None and not patient_notes.strip():
         patient_notes = None
     
-    # Check cache first
-    # 首先检查缓存
-    if cache_db:
+    # Check cache first (unless regenerate is True)
+    # 首先检查缓存（除非 regenerate 为 True）
+    if cache_db and not regenerate:
         if debug:
             if food_log_id:
                 print(f"[DEBUG] Checking cache for food_log_id: {food_log_id}")
@@ -2386,6 +2387,7 @@ def generate_weekly_or_monthly_insight(
     language: str = 'zh',
     cache_db: Optional[CacheDB] = None,
     session_token: Optional[str] = None,
+    regenerate: bool = False,
     debug: bool = False
 ) -> Optional[str]:
     """
@@ -2423,14 +2425,16 @@ def generate_weekly_or_monthly_insight(
     try:
         print(f"[INFO] Generating {period_type} insight for patient {patient_id} from {start_date} to {end_date}")
         
-        # Check cache first
-        # 首先检查缓存
+        # Check cache first (unless regenerate is True)
+        # 首先检查缓存（除非 regenerate 为 True）
         # Cache is based on query date (end_date), not date range
         # 缓存基于查询日期（end_date），而不是日期范围
-        if cache_db:
-            start_date_str = start_date.strftime('%Y-%m-%d') if hasattr(start_date, 'strftime') else str(start_date)
-            end_date_str = end_date.strftime('%Y-%m-%d') if hasattr(end_date, 'strftime') else str(end_date)
-            
+        # Note: regenerate only affects the period insight cache, not daily meal summaries
+        # 注意：regenerate 只影响周期洞察缓存，不影响 daily meal summaries
+        start_date_str = start_date.strftime('%Y-%m-%d') if hasattr(start_date, 'strftime') else str(start_date)
+        end_date_str = end_date.strftime('%Y-%m-%d') if hasattr(end_date, 'strftime') else str(end_date)
+        
+        if cache_db and not regenerate:
             # Cache key is based on end_date (query date) only
             # 缓存键仅基于 end_date（查询日期）
             cached_insight = cache_db.get_period_insight_cache(
@@ -2445,6 +2449,14 @@ def generate_weekly_or_monthly_insight(
                 return cached_insight
             else:
                 print(f"[INFO] ✗ Cache miss, generating new {period_type} insight for patient {patient_id} (query date: {end_date_str}, period: {start_date_str} to {end_date_str})")
+        elif regenerate:
+            print(f"[INFO] Regenerate mode: clearing {period_type} insight cache for patient {patient_id} (query date: {end_date_str})")
+            # Remove only the specific period insight cache entry
+            # 只移除特定的周期洞察缓存条目
+            if cache_db:
+                # The cache will be overwritten when we save the new insight
+                # 当我们保存新的洞察时，缓存会被覆盖
+                pass
         
         # Use the existing daily summary generation logic (which queries DB and uses cache)
         # 使用现有的daily summary生成逻辑（会查询数据库并使用缓存）
@@ -2561,6 +2573,10 @@ def generate_weekly_or_monthly_insight(
                     food_log_id = str(row.get('_id', '')) if hasattr(row.get('_id'), '__str__') else None
                     
                     # Analyze each image
+                    # Note: When generating weekly/monthly insight, we don't regenerate daily meal summaries
+                    # even if regenerate=True, because regenerate should only affect the period insight cache
+                    # 注意：生成 weekly/monthly insight 时，即使 regenerate=True，也不重新生成 daily meal summaries
+                    # 因为 regenerate 应该只影响周期洞察缓存
                     for img_url in image_urls:
                         summary = analyze_food_image_with_openai(
                             img_url,
@@ -2570,6 +2586,7 @@ def generate_weekly_or_monthly_insight(
                             patient_id=patient_id,
                             date=date_str,
                             cache_db=cache_db,
+                            regenerate=False,  # Always use cached daily meal summaries for period insights
                             debug=debug
                         )
                         if summary:
