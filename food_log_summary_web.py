@@ -363,7 +363,7 @@ def get_care_note_by_id(
 
 
 # HTML Template for the web interface
-HTML_TEMPLATE = """
+HTML_TEMPLATE = r"""
 <!DOCTYPE html>
 <html lang="zh">
 <head>
@@ -1372,6 +1372,176 @@ HTML_TEMPLATE = """
             }
         });
         
+        // Helper function to format plain text insight as HTML with full Markdown support
+        function formatInsightText(text) {
+            if (!text) return '';
+            
+            // Escape HTML to prevent XSS (but preserve markdown syntax)
+            const escapeHtml = (str) => {
+                const div = document.createElement('div');
+                div.textContent = str;
+                return div.innerHTML;
+            };
+            
+            // Process Markdown inline formatting
+            function processInlineMarkdown(line) {
+                let html = escapeHtml(line);
+                
+                // Bold: **text** or __text__
+                html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+                html = html.replace(/__(.+?)__/g, '<strong>$1</strong>');
+                
+                // Italic: *text* or _text_ (but not if it's part of bold)
+                html = html.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>');
+                html = html.replace(/(?<!_)_(?!_)(.+?)(?<!_)_(?!_)/g, '<em>$1</em>');
+                
+                // Inline code: `code`
+                html = html.replace(/`([^`]+)`/g, '<code style="background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-family: monospace; font-size: 0.9em;">$1</code>');
+                
+                return html;
+            }
+            
+            // Split by lines
+            const lines = text.split('\n');
+            let html = '';
+            let inList = false;
+            let listType = null; // 'bullet', 'number', or null
+            let listItems = [];
+            
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim();
+                const nextLine = i < lines.length - 1 ? lines[i + 1].trim() : '';
+                
+                // Check for headings: #, ##, ###
+                const h1Match = line.match(/^#\s+(.+)$/);
+                const h2Match = line.match(/^##\s+(.+)$/);
+                const h3Match = line.match(/^###\s+(.+)$/);
+                
+                if (h1Match) {
+                    // Close any open list
+                    if (inList) {
+                        html += closeList(listType, listItems);
+                        inList = false;
+                        listType = null;
+                        listItems = [];
+                    }
+                    html += `<h1 style="margin-top: 30px; margin-bottom: 15px; color: #2c3e50; font-size: 28px; font-weight: 700;">${processInlineMarkdown(h1Match[1])}</h1>`;
+                    continue;
+                }
+                
+                if (h2Match) {
+                    // Close any open list
+                    if (inList) {
+                        html += closeList(listType, listItems);
+                        inList = false;
+                        listType = null;
+                        listItems = [];
+                    }
+                    html += `<h2 style="margin-top: 25px; margin-bottom: 12px; color: #2c3e50; font-size: 22px; font-weight: 700;">${processInlineMarkdown(h2Match[1])}</h2>`;
+                    continue;
+                }
+                
+                if (h3Match) {
+                    // Close any open list
+                    if (inList) {
+                        html += closeList(listType, listItems);
+                        inList = false;
+                        listType = null;
+                        listItems = [];
+                    }
+                    html += `<h3 style="margin-top: 20px; margin-bottom: 10px; color: #2c3e50; font-size: 18px; font-weight: 700;">${processInlineMarkdown(h3Match[1])}</h3>`;
+                    continue;
+                }
+                
+                // Empty line - close list if open
+                if (!line) {
+                    if (inList) {
+                        html += closeList(listType, listItems);
+                        inList = false;
+                        listType = null;
+                        listItems = [];
+                    }
+                    continue;
+                }
+                
+                // Check for bullet list: -, *, or •
+                const bulletMatch = line.match(/^[-•*]\s+(.+)$/);
+                if (bulletMatch) {
+                    if (!inList || listType !== 'bullet') {
+                        if (inList) {
+                            html += closeList(listType, listItems);
+                        }
+                        inList = true;
+                        listType = 'bullet';
+                        listItems = [];
+                    }
+                    listItems.push(processInlineMarkdown(bulletMatch[1]));
+                    continue;
+                }
+                
+                // Check for numbered list: 1. or 1)
+                const numberMatch = line.match(/^\d+[.)]\s+(.+)$/);
+                if (numberMatch) {
+                    if (!inList || listType !== 'number') {
+                        if (inList) {
+                            html += closeList(listType, listItems);
+                        }
+                        inList = true;
+                        listType = 'number';
+                        listItems = [];
+                    }
+                    listItems.push(processInlineMarkdown(numberMatch[1]));
+                    continue;
+                }
+                
+                // Regular paragraph line
+                // Close any open list first
+                if (inList) {
+                    html += closeList(listType, listItems);
+                    inList = false;
+                    listType = null;
+                    listItems = [];
+                }
+                
+                // Always add regular paragraph lines
+                // Check if we should combine with previous paragraph or create new one
+                const prevLine = i > 0 ? lines[i - 1].trim() : '';
+                const isPrevLineRegular = prevLine && 
+                    !prevLine.match(/^#+\s/) && 
+                    !prevLine.match(/^[-•*]\s/) && 
+                    !prevLine.match(/^\d+[.)]\s/);
+                const isNextLineRegular = nextLine && 
+                    !nextLine.match(/^#+\s/) && 
+                    !nextLine.match(/^[-•*]\s/) && 
+                    !nextLine.match(/^\d+[.)]\s/);
+                
+                // If previous line was also regular and not empty, and next line is also regular,
+                // we might want to combine, but for now just add each as separate paragraph
+                // This ensures all content is displayed
+                html += `<p style="margin: 12px 0; line-height: 1.8; color: #444; font-size: 15px;">${processInlineMarkdown(line)}</p>`;
+            }
+            
+            // Close any remaining list
+            if (inList) {
+                html += closeList(listType, listItems);
+            }
+            
+            function closeList(type, items) {
+                if (items.length === 0) return '';
+                const listItemsHtml = items.map(item => 
+                    `<li style="margin: 6px 0; padding-left: 5px; line-height: 1.7; color: #555;">${item}</li>`
+                ).join('');
+                
+                if (type === 'number') {
+                    return `<ol style="margin: 15px 0; padding-left: 30px; line-height: 1.8;">${listItemsHtml}</ol>`;
+                } else {
+                    return `<ul style="margin: 15px 0; padding-left: 30px; line-height: 1.8; list-style-type: disc;">${listItemsHtml}</ul>`;
+                }
+            }
+            
+            return html || `<p style="line-height: 1.8; color: #444; font-size: 15px;">${processInlineMarkdown(text.replace(/\n/g, '<br>'))}</p>`;
+        }
+        
         // Handle weekly insight button
         document.getElementById('generateWeeklyBtn').addEventListener('click', async function() {
             const t = translations[currentLang];
@@ -1419,7 +1589,9 @@ HTML_TEMPLATE = """
                     periodError.textContent = data.error;
                     periodError.classList.add('active');
                 } else if (data.insight) {
-                    periodResultText.textContent = data.insight;
+                    // Format plain text as HTML with proper line breaks and paragraphs
+                    const formattedInsight = formatInsightText(data.insight);
+                    periodResultText.innerHTML = formattedInsight;
                     periodResultContainer.classList.add('active');
                     if (periodProgress) {
                         periodProgress.textContent = '';
@@ -1484,7 +1656,9 @@ HTML_TEMPLATE = """
                     periodError.textContent = data.error;
                     periodError.classList.add('active');
                 } else if (data.insight) {
-                    periodResultText.textContent = data.insight;
+                    // Format plain text as HTML with proper line breaks and paragraphs
+                    const formattedInsight = formatInsightText(data.insight);
+                    periodResultText.innerHTML = formattedInsight;
                     periodResultContainer.classList.add('active');
                     if (periodProgress) {
                         periodProgress.textContent = '';
