@@ -9,7 +9,7 @@ Interactive web application to generate food log summaries with patient ID and d
 import os
 import sys
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
@@ -37,7 +37,8 @@ from generate_food_log_summary import (
     group_food_logs_by_meal,
     generate_html_summary,
     analyze_food_image_with_openai,
-    download_image_with_cache
+    download_image_with_cache,
+    generate_weekly_or_monthly_insight
 )
 
 try:
@@ -546,8 +547,32 @@ HTML_TEMPLATE = """
                 </label>
             </div>
             
-            <button type="submit" id="generateBtn">生成总结</button>
+            <div style="margin-top: 20px; margin-bottom: 15px;">
+                <h3 id="nutritionInsightsTitle" style="margin: 0; color: #2c3e50; font-size: 20px; font-weight: 600;">生成营养洞察 / Generate Nutrition Insights</h3>
+            </div>
+            <div style="display: flex; gap: 15px; align-items: flex-start; flex-wrap: wrap;">
+                <button type="submit" id="generateBtn">Daily Summary</button>
+                <button type="button" id="generateWeeklyBtn" style="background: #4a90e2;">
+                    <span id="generateWeeklyText">Weekly Insights</span>
+                </button>
+                <button type="button" id="generateMonthlyBtn" style="background: #4a90e2;">
+                    <span id="generateMonthlyText">Monthly Insights</span>
+                </button>
+            </div>
         </form>
+        
+        <div class="loading" id="periodLoading" style="margin-top: 20px;">
+            <div class="spinner"></div>
+            <div id="periodLoadingText">正在生成洞察，请稍候...</div>
+            <div id="periodProgress" style="margin-top: 10px; font-size: 14px; color: #666;"></div>
+        </div>
+        
+        <div class="error" id="periodError"></div>
+        
+        <div class="result-container" id="periodResultContainer" style="margin-top: 20px;">
+            <h2 id="periodResultTitle" style="color: #2c3e50; font-size: 24px; margin-bottom: 15px;">生成的洞察</h2>
+            <div id="periodResultText" style="padding: 25px; background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%); border-radius: 12px; border-left: 5px solid #4a90e2; box-shadow: 0 2px 8px rgba(0,0,0,0.1); color: #555; font-size: 15px; line-height: 1.8;"></div>
+        </div>
         
         <div style="margin-top: 30px; padding-top: 30px; border-top: 2px solid #e0e0e0;">
             <h3 id="batchCacheTitle" style="margin-top: 0; color: #2c3e50;">批量生成缓存 / Batch Cache Generation</h3>
@@ -628,7 +653,15 @@ HTML_TEMPLATE = """
                 processingPatient: '正在处理病人 {id} ({current}/{total})...',
                 completedPatient: '已完成 {current}/{total}: {id} ({images} 图片, {summaries} 摘要)',
                 skippedPatient: '跳过 {id} ({current}/{total})',
-                finalSummary: '完成！处理了 {processed}/{total} 个病人，生成了 {images} 张图片缓存和 {summaries} 个AI摘要缓存。'
+                finalSummary: '完成！处理了 {processed}/{total} 个病人，生成了 {images} 张图片缓存和 {summaries} 个AI摘要缓存。',
+                generateWeekly: 'Weekly Insights',
+                generateMonthly: 'Monthly Insights',
+                periodLoading: '正在生成洞察，请稍候...',
+                periodError: '生成洞察失败',
+                periodResultTitle: '生成的洞察',
+                selectPatientForPeriod: '请先选择病人ID',
+                nutritionInsightsTitle: '生成营养洞察 / Generate Nutrition Insights',
+                dailySummary: 'Daily Summary'
             },
             en: {
                 title: 'Food Log Summary Generator',
@@ -669,7 +702,15 @@ HTML_TEMPLATE = """
                 processingPatient: 'Processing patient {id} ({current}/{total})...',
                 completedPatient: 'Completed {current}/{total}: {id} ({images} images, {summaries} summaries)',
                 skippedPatient: 'Skipped {id} ({current}/{total})',
-                finalSummary: 'Complete! Processed {processed}/{total} patients, generated {images} image caches and {summaries} AI summary caches.'
+                finalSummary: 'Complete! Processed {processed}/{total} patients, generated {images} image caches and {summaries} AI summary caches.',
+                generateWeekly: 'Weekly Insights',
+                generateMonthly: 'Monthly Insights',
+                periodLoading: 'Generating insights, please wait...',
+                periodError: 'Failed to generate insights',
+                periodResultTitle: 'Generated Insights',
+                selectPatientForPeriod: 'Please select Patient ID first',
+                nutritionInsightsTitle: 'Generate Nutrition Insights',
+                dailySummary: 'Daily Summary'
             }
         };
         
@@ -685,7 +726,11 @@ HTML_TEMPLATE = """
             document.getElementById('patientLabel').textContent = t.selectPatient;
             document.getElementById('dateLabel').textContent = t.selectDate;
             document.getElementById('debugLabel').textContent = t.debugMode;
-            document.getElementById('generateBtn').textContent = t.generate;
+            document.getElementById('generateBtn').textContent = t.dailySummary;
+            
+            // Update nutrition insights title
+            const nutritionInsightsTitle = document.getElementById('nutritionInsightsTitle');
+            if (nutritionInsightsTitle) nutritionInsightsTitle.textContent = t.nutritionInsightsTitle;
             document.getElementById('loadingText').textContent = t.loading;
             document.getElementById('resultTitle').textContent = t.resultTitle;
             
@@ -706,6 +751,17 @@ HTML_TEMPLATE = """
             if (cacheMonthNote) cacheMonthNote.textContent = t.cacheMonthNote;
             if (cacheActiveNote) cacheActiveNote.textContent = t.cacheActiveNote;
             if (cacheLoadingText) cacheLoadingText.textContent = t.cacheLoading;
+            
+            // Update period insights section
+            const generateWeeklyText = document.getElementById('generateWeeklyText');
+            const generateMonthlyText = document.getElementById('generateMonthlyText');
+            const periodLoadingText = document.getElementById('periodLoadingText');
+            const periodResultTitle = document.getElementById('periodResultTitle');
+            
+            if (generateWeeklyText) generateWeeklyText.textContent = t.generateWeekly;
+            if (generateMonthlyText) generateMonthlyText.textContent = t.generateMonthly;
+            if (periodLoadingText) periodLoadingText.textContent = t.periodLoading;
+            if (periodResultTitle) periodResultTitle.textContent = t.periodResultTitle;
             
             // Update labels for patient info section
             const patientInfo = document.getElementById('patientInfo');
@@ -1316,6 +1372,136 @@ HTML_TEMPLATE = """
             }
         });
         
+        // Handle weekly insight button
+        document.getElementById('generateWeeklyBtn').addEventListener('click', async function() {
+            const t = translations[currentLang];
+            const patientId = document.getElementById('patientSelect').value;
+            
+            if (!patientId) {
+                alert(t.selectPatientForPeriod);
+                return;
+            }
+            
+            const periodLoading = document.getElementById('periodLoading');
+            const periodError = document.getElementById('periodError');
+            const periodResultContainer = document.getElementById('periodResultContainer');
+            const periodResultText = document.getElementById('periodResultText');
+            const btn = document.getElementById('generateWeeklyBtn');
+            
+            periodLoading.classList.add('active');
+            periodError.classList.remove('active');
+            periodResultContainer.classList.remove('active');
+            periodError.textContent = '';
+            btn.disabled = true;
+            
+            try {
+                const periodProgress = document.getElementById('periodProgress');
+                if (periodProgress) {
+                    periodProgress.textContent = t.periodLoading;
+                }
+                
+                const response = await fetch('/api/generate-weekly-insight', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        patient_id: patientId,
+                        language: currentLang
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                if (data.error) {
+                    periodError.textContent = data.error;
+                    periodError.classList.add('active');
+                } else if (data.insight) {
+                    periodResultText.textContent = data.insight;
+                    periodResultContainer.classList.add('active');
+                    if (periodProgress) {
+                        periodProgress.textContent = '';
+                    }
+                } else {
+                    throw new Error('No insight data received');
+                }
+            } catch (error) {
+                console.error('Error generating weekly insight:', error);
+                periodError.textContent = t.periodError + ': ' + error.message;
+                periodError.classList.add('active');
+            } finally {
+                periodLoading.classList.remove('active');
+                btn.disabled = false;
+            }
+        });
+        
+        // Handle monthly insight button
+        document.getElementById('generateMonthlyBtn').addEventListener('click', async function() {
+            const t = translations[currentLang];
+            const patientId = document.getElementById('patientSelect').value;
+            
+            if (!patientId) {
+                alert(t.selectPatientForPeriod);
+                return;
+            }
+            
+            const periodLoading = document.getElementById('periodLoading');
+            const periodError = document.getElementById('periodError');
+            const periodResultContainer = document.getElementById('periodResultContainer');
+            const periodResultText = document.getElementById('periodResultText');
+            const btn = document.getElementById('generateMonthlyBtn');
+            
+            periodLoading.classList.add('active');
+            periodError.classList.remove('active');
+            periodResultContainer.classList.remove('active');
+            periodError.textContent = '';
+            btn.disabled = true;
+            
+            try {
+                const periodProgress = document.getElementById('periodProgress');
+                if (periodProgress) {
+                    periodProgress.textContent = t.periodLoading;
+                }
+                
+                const response = await fetch('/api/generate-monthly-insight', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        patient_id: patientId,
+                        language: currentLang
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                if (data.error) {
+                    periodError.textContent = data.error;
+                    periodError.classList.add('active');
+                } else if (data.insight) {
+                    periodResultText.textContent = data.insight;
+                    periodResultContainer.classList.add('active');
+                    if (periodProgress) {
+                        periodProgress.textContent = '';
+                    }
+                } else {
+                    throw new Error('No insight data received');
+                }
+            } catch (error) {
+                console.error('Error generating monthly insight:', error);
+                periodError.textContent = t.periodError + ': ' + error.message;
+                periodError.classList.add('active');
+            } finally {
+                periodLoading.classList.remove('active');
+                btn.disabled = false;
+            }
+        });
+        
         function showError(message) {
             const errorDiv = document.getElementById('error');
             errorDiv.textContent = message;
@@ -1898,6 +2084,106 @@ def api_generate_cache_for_patient():
             "success": False,
             "error": str(e)
         }), 500
+
+
+@app.route('/api/generate-weekly-insight', methods=['POST'])
+def api_generate_weekly_insight():
+    """API endpoint to generate weekly nutrition insight."""
+    try:
+        data = request.json
+        patient_id = data.get('patient_id')
+        language = data.get('language', 'zh')
+        
+        if not patient_id:
+            return jsonify({"error": "Patient ID is required"}), 400
+        
+        if not OPENAI_API_KEY:
+            return jsonify({"error": "OPENAI_API_KEY not configured"}), 500
+        
+        # Get patient info
+        client = get_mongo_client(MONGO_URI)
+        patient_info = get_patient_info(client, patient_id)
+        client.close()
+        
+        # Calculate date range (past 7 days)
+        import pytz
+        end_date = datetime.now(pytz.timezone("America/Los_Angeles"))
+        start_date = end_date - timedelta(days=7)
+        
+        # Generate insight
+        cache_db = CacheDB(db_path=Path("./cache.db")) if CacheDB else None
+        insight = generate_weekly_or_monthly_insight(
+            patient_info,
+            patient_id,
+            start_date,
+            end_date,
+            'weekly',
+            openai_api_key=OPENAI_API_KEY,
+            language=language,
+            cache_db=cache_db,
+            session_token=SESSION_TOKEN,
+            debug=False
+        )
+        
+        if insight:
+            return jsonify({"insight": insight})
+        else:
+            return jsonify({"error": "Failed to generate weekly insight"}), 500
+            
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/generate-monthly-insight', methods=['POST'])
+def api_generate_monthly_insight():
+    """API endpoint to generate monthly nutrition insight."""
+    try:
+        data = request.json
+        patient_id = data.get('patient_id')
+        language = data.get('language', 'zh')
+        
+        if not patient_id:
+            return jsonify({"error": "Patient ID is required"}), 400
+        
+        if not OPENAI_API_KEY:
+            return jsonify({"error": "OPENAI_API_KEY not configured"}), 500
+        
+        # Get patient info
+        client = get_mongo_client(MONGO_URI)
+        patient_info = get_patient_info(client, patient_id)
+        client.close()
+        
+        # Calculate date range (past 30 days)
+        import pytz
+        end_date = datetime.now(pytz.timezone("America/Los_Angeles"))
+        start_date = end_date - timedelta(days=30)
+        
+        # Generate insight
+        cache_db = CacheDB(db_path=Path("./cache.db")) if CacheDB else None
+        insight = generate_weekly_or_monthly_insight(
+            patient_info,
+            patient_id,
+            start_date,
+            end_date,
+            'monthly',
+            openai_api_key=OPENAI_API_KEY,
+            language=language,
+            cache_db=cache_db,
+            session_token=SESSION_TOKEN,
+            debug=False
+        )
+        
+        if insight:
+            return jsonify({"insight": insight})
+        else:
+            return jsonify({"error": "Failed to generate monthly insight"}), 500
+            
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route('/care-note/<patient_id>/<note_id>')

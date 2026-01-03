@@ -2375,6 +2375,258 @@ body {{
     return html_content
 
 
+def generate_weekly_or_monthly_insight(
+    patient_info: Dict[str, Any],
+    patient_id: str,
+    start_date: datetime,
+    end_date: datetime,
+    period_type: str,  # 'weekly' or 'monthly'
+    openai_api_key: Optional[str] = None,
+    prompt_file: Optional[Path] = None,
+    language: str = 'zh',
+    cache_db: Optional[CacheDB] = None,
+    session_token: Optional[str] = None,
+    debug: bool = False
+) -> Optional[str]:
+    """
+    Generate weekly or monthly nutrition insight based on AI meal summaries.
+    基于AI meal summaries生成周/月营养洞察。
+    
+    Args:
+        patient_info: Patient information dictionary / 病人信息字典
+        patient_id: Patient ID / 病人ID
+        start_date: Start date of the period / 周期开始日期
+        end_date: End date of the period / 周期结束日期
+        period_type: 'weekly' or 'monthly' / 'weekly' 或 'monthly'
+        openai_api_key: OpenAI API key / OpenAI API key
+        prompt_file: Path to prompt file / prompt文件路径
+        language: Language for output / 输出语言
+        cache_db: Cache database instance / 缓存数据库实例
+        session_token: Session token for API calls / API调用的会话令牌
+        debug: Enable debug mode / 启用调试模式
+        
+    Returns:
+        Generated insight text or None if failed / 生成的洞察文本或None
+    """
+    if OpenAI is None:
+        if debug:
+            print("[DEBUG] OpenAI package not available, skipping insight generation")
+        return None
+    
+    # Get API key
+    api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        if debug:
+            print("[DEBUG] OPENAI_API_KEY not found, skipping insight generation")
+        return None
+    
+    try:
+        # Get MongoDB client
+        client = get_mongo_client()
+        database = client["UnifiedCare"]
+        food_logs_collection = database["food_logs"]
+        
+        # Query food logs for the period
+        # Handle timezone-aware datetime
+        if start_date.tzinfo is None:
+            start_date_pt = pytz.timezone("America/Los_Angeles").localize(start_date)
+        else:
+            start_date_pt = start_date.astimezone(pytz.timezone("America/Los_Angeles"))
+        
+        if end_date.tzinfo is None:
+            end_date_pt = pytz.timezone("America/Los_Angeles").localize(end_date)
+        else:
+            end_date_pt = end_date.astimezone(pytz.timezone("America/Los_Angeles"))
+        
+        query_filter = {
+            "patientId": patient_id,
+            "createdAt": {
+                "$gte": start_date_pt,
+                "$lte": end_date_pt
+            }
+        }
+        
+        cursor = food_logs_collection.find(query_filter).sort("createdAt", 1)
+        food_logs_df = pd.DataFrame(list(cursor))
+        
+        if food_logs_df.empty:
+            if debug:
+                print(f"[DEBUG] No food logs found for period {start_date} to {end_date}")
+            return None
+        
+        # Get image URLs for all food logs first
+        if session_token:
+            food_logs_df, _ = get_food_log_image_urls(
+                food_logs_df,
+                session_token,
+                debug=debug
+            )
+        
+        # Group by date and generate daily summaries
+        daily_summaries = []
+        # Convert timezone-aware datetime to date for comparison
+        if hasattr(start_date_pt, 'date'):
+            start_date_only = start_date_pt.date()
+        elif hasattr(start_date, 'date'):
+            start_date_only = start_date.date()
+        else:
+            start_date_only = start_date
+        
+        if hasattr(end_date_pt, 'date'):
+            end_date_only = end_date_pt.date()
+        elif hasattr(end_date, 'date'):
+            end_date_only = end_date.date()
+        else:
+            end_date_only = end_date
+        
+        for date in pd.date_range(start=start_date_only, end=end_date_only, freq='D'):
+            date_str = date.strftime('%Y-%m-%d')
+            # Convert createdAt to date for comparison
+            if 'createdAt' in food_logs_df.columns:
+                try:
+                    date_logs = food_logs_df[food_logs_df['createdAt'].dt.date == date.date()]
+                except Exception as e:
+                    if debug:
+                        print(f"[DEBUG] Error filtering by date: {e}")
+                    continue
+            else:
+                continue
+            
+            if date_logs.empty:
+                continue
+            
+            # Group by meal
+            food_logs_by_meal = group_food_logs_by_meal(date_logs, language=language)
+            
+            # Generate AI summaries for each meal if not cached
+            daily_meal_summaries = []
+            for meal_type, logs in food_logs_by_meal.items():
+                for _, row in logs:
+                    # Get image URLs from row (already fetched above)
+                    image_urls = row.get("ImageURLs")
+                    if not image_urls or not isinstance(image_urls, list):
+                        # Fallback to ImgName if ImageURLs not available
+                        img_names_str = str(row.get("ImgName", "") or "").strip()
+                        if img_names_str:
+                            image_urls = [url.strip() for url in img_names_str.split(";") 
+                                        if url.strip() and (url.startswith('http://') or url.startswith('https://'))]
+                        else:
+                            image_urls = []
+                    
+                    if not image_urls:
+                        continue
+                    
+                    # Get patient notes
+                    patient_notes_text = None
+                    description = row.get('Description') or row.get('note') or row.get('description')
+                    if description and isinstance(description, str) and description.strip():
+                        patient_notes_text = description.strip()
+                    
+                    # Get food_log_id
+                    food_log_id = str(row.get('_id', '')) if hasattr(row.get('_id'), '__str__') else None
+                    
+                    # Analyze each image
+                    for img_url in image_urls:
+                        summary = analyze_food_image_with_openai(
+                            img_url,
+                            openai_api_key=api_key,
+                            patient_notes=patient_notes_text,
+                            food_log_id=food_log_id,
+                            patient_id=patient_id,
+                            date=date_str,
+                            cache_db=cache_db,
+                            debug=debug
+                        )
+                        if summary:
+                            daily_meal_summaries.append({
+                                'date': date_str,
+                                'meal_type': meal_type,
+                                'summary': summary
+                            })
+            
+            if daily_meal_summaries:
+                daily_summaries.append({
+                    'date': date_str,
+                    'summaries': daily_meal_summaries
+                })
+        
+        if not daily_summaries:
+            if debug:
+                print("[DEBUG] No daily summaries generated")
+            return None
+        
+        # Format summary text for prompt
+        summary_text = ""
+        for daily in daily_summaries:
+            summary_text += f"\n\nDate: {daily['date']}\n"
+            for meal_summary in daily['summaries']:
+                summary_text += f"Meal: {meal_summary['meal_type']}\n"
+                summary_text += f"AI Title: {meal_summary['summary'].get('ai_title', 'N/A')}\n"
+                summary_text += f"Foods: {', '.join(meal_summary['summary'].get('detected_foods', []))}\n"
+                summary_text += f"Composition: {meal_summary['summary'].get('composition', {})}\n"
+                summary_text += f"Observations: {', '.join(meal_summary['summary'].get('observations', []))}\n"
+        
+        # Load prompt template
+        if prompt_file is None:
+            if period_type == 'weekly':
+                prompt_file = Path(__file__).parent / "weekly_nutrition_insight_prompt.txt"
+            else:
+                prompt_file = Path(__file__).parent / "monthly_nutrition_insight_prompt.txt"
+        
+        try:
+            prompt_template = prompt_file.read_text(encoding="utf-8")
+        except Exception as e:
+            if debug:
+                print(f"[DEBUG] Failed to read prompt file: {e}")
+            return None
+        
+        # Format prompt
+        prompt_text = prompt_template.format(
+            patient_id=patient_info.get('patient_id', patient_id),
+            age=patient_info.get('age', 'N/A'),
+            gender=patient_info.get('gender', 'N/A'),
+            weight=patient_info.get('weight_kg', 'N/A'),
+            height=patient_info.get('height_cm', 'N/A'),
+            bmi=patient_info.get('bmi', 'N/A'),
+            medical_history=patient_info.get('medical_history', 'N/A'),
+            diagnoses=patient_info.get('diagnoses', 'N/A'),
+            medications=patient_info.get('medications', 'N/A'),
+            lab_results=patient_info.get('lab_results', 'N/A'),
+            start_date=start_date.strftime('%Y-%m-%d'),
+            end_date=end_date.strftime('%Y-%m-%d'),
+            weekly_summary=summary_text if period_type == 'weekly' else '',
+            monthly_summary=summary_text if period_type == 'monthly' else ''
+        )
+        
+        # Call OpenAI
+        client = OpenAI(api_key=api_key)
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt_text
+                }
+            ],
+            max_tokens=2000,
+            temperature=0.7
+        )
+        
+        insight_text = response.choices[0].message.content
+        
+        if debug:
+            print(f"[DEBUG] Generated {period_type} insight: {len(insight_text)} characters")
+        
+        return insight_text
+        
+    except Exception as e:
+        if debug:
+            print(f"[DEBUG] Failed to generate {period_type} insight: {e}")
+            import traceback
+            traceback.print_exc()
+        return None
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Generate food log summary for a specific patient on a specific date. / 为特定病人在特定日期生成食物日志总结。"
