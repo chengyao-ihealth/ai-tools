@@ -483,6 +483,37 @@ HTML_TEMPLATE = """
         .result-container.active {
             display: block;
         }
+        .result-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            cursor: pointer;
+            user-select: none;
+            padding: 10px 15px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            margin-bottom: 10px;
+            transition: background 0.2s;
+        }
+        .result-header:hover {
+            background: #e9ecef;
+        }
+        .result-header h2 {
+            margin: 0;
+            flex: 1;
+        }
+        .collapse-icon {
+            font-size: 16px;
+            transition: transform 0.3s;
+            color: #666;
+            margin-left: 10px;
+        }
+        .result-container.collapsed .collapse-icon {
+            transform: rotate(-90deg);
+        }
+        .result-container.collapsed .result-content {
+            display: none;
+        }
         .result-frame {
             width: 100%;
             height: 800px;
@@ -541,14 +572,11 @@ HTML_TEMPLATE = """
                 </div>
             </div>
             
-            <div class="form-group">
+            <div class="form-group" style="display: flex; gap: 30px; align-items: center;">
                 <label>
                     <input type="checkbox" id="debugCheckbox" name="debug"/>
                     <span id="debugLabel">Debug模式（显示数据结构）</span>
                 </label>
-            </div>
-            
-            <div class="form-group">
                 <label>
                     <input type="checkbox" id="regenerateCheckbox" name="regenerate"/>
                     <span id="regenerateLabel">重新生成（更新缓存） / Regenerate (Update Cache)</span>
@@ -568,34 +596,6 @@ HTML_TEMPLATE = """
                 </button>
             </div>
         </form>
-        
-        <div class="loading" id="periodLoading" style="margin-top: 20px;">
-            <div class="spinner"></div>
-            <div id="periodLoadingText">正在生成洞察，请稍候...</div>
-            <div id="periodProgress" style="margin-top: 10px; font-size: 14px; color: #666;"></div>
-        </div>
-        
-        <div class="error" id="periodError"></div>
-        
-        <div class="result-container" id="periodResultContainer" style="margin-top: 20px;">
-            <h2 id="periodResultTitle" style="color: #2c3e50; font-size: 24px; margin-bottom: 15px;">生成的洞察</h2>
-            <div id="periodResultText" style="padding: 25px; background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%); border-radius: 12px; border-left: 5px solid #4a90e2; box-shadow: 0 2px 8px rgba(0,0,0,0.1); color: #555; font-size: 15px; line-height: 1.8;">
-                <style>
-                    #periodResultText h1 { font-size: 28px; font-weight: 700; margin-top: 30px; margin-bottom: 15px; color: #2c3e50; }
-                    #periodResultText h2 { font-size: 22px; font-weight: 700; margin-top: 25px; margin-bottom: 12px; color: #2c3e50; }
-                    #periodResultText h3 { font-size: 18px; font-weight: 700; margin-top: 20px; margin-bottom: 10px; color: #2c3e50; }
-                    #periodResultText p { margin: 12px 0; line-height: 1.8; }
-                    #periodResultText ul, #periodResultText ol { margin: 15px 0; padding-left: 30px; line-height: 1.8; }
-                    #periodResultText li { margin: 6px 0; }
-                    #periodResultText strong { font-weight: 700; color: #2c3e50; }
-                    #periodResultText em { font-style: italic; }
-                    #periodResultText code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-family: monospace; font-size: 0.9em; }
-                    #periodResultText pre { background: #f4f4f4; padding: 15px; border-radius: 5px; overflow-x: auto; }
-                    #periodResultText pre code { background: none; padding: 0; }
-                    #periodResultText blockquote { border-left: 4px solid #4a90e2; padding-left: 15px; margin: 15px 0; color: #666; }
-                </style>
-            </div>
-        </div>
         
         <div style="margin-top: 30px; padding-top: 30px; border-top: 2px solid #e0e0e0;">
             <h3 id="batchCacheTitle" style="margin-top: 0; color: #2c3e50;">批量生成缓存</h3>
@@ -629,8 +629,41 @@ HTML_TEMPLATE = """
         <div class="error" id="error"></div>
         
         <div class="result-container" id="resultContainer">
-            <h2 id="resultTitle">生成的总结</h2>
-            <iframe id="resultFrame" class="result-frame" src=""></iframe>
+            <div class="result-header" onclick="toggleResultContainer('resultContainer')">
+                <h2 id="resultTitle">生成的总结</h2>
+                <span class="collapse-icon">▼</span>
+            </div>
+            <div class="result-content">
+                <iframe id="resultFrame" class="result-frame" src=""></iframe>
+            </div>
+        </div>
+        
+        <div class="loading" id="periodLoading" style="margin-top: 20px;">
+            <div class="spinner"></div>
+            <div id="periodLoadingText">正在生成洞察，请稍候...</div>
+            <div id="periodProgress" style="margin-top: 10px; font-size: 14px; color: #666;"></div>
+        </div>
+        
+        <div class="error" id="periodError"></div>
+        
+        <div class="result-container" id="periodResultContainer" style="margin-top: 20px;">
+            <h2 id="periodResultTitle" style="color: #2c3e50; font-size: 24px; margin-bottom: 15px;">生成的洞察</h2>
+            <div id="periodResultText" style="padding: 25px; background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%); border-radius: 12px; border-left: 5px solid #4a90e2; box-shadow: 0 2px 8px rgba(0,0,0,0.1); color: #555; font-size: 15px; line-height: 1.8;">
+                <style>
+                    #periodResultText h1 { font-size: 28px; font-weight: 700; margin-top: 30px; margin-bottom: 15px; color: #2c3e50; }
+                    #periodResultText h2 { font-size: 22px; font-weight: 700; margin-top: 25px; margin-bottom: 12px; color: #2c3e50; }
+                    #periodResultText h3 { font-size: 18px; font-weight: 700; margin-top: 20px; margin-bottom: 10px; color: #2c3e50; }
+                    #periodResultText p { margin: 12px 0; line-height: 1.8; }
+                    #periodResultText ul, #periodResultText ol { margin: 15px 0; padding-left: 30px; line-height: 1.8; }
+                    #periodResultText li { margin: 6px 0; }
+                    #periodResultText strong { font-weight: 700; color: #2c3e50; }
+                    #periodResultText em { font-style: italic; }
+                    #periodResultText code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-family: monospace; font-size: 0.9em; }
+                    #periodResultText pre { background: #f4f4f4; padding: 15px; border-radius: 5px; overflow-x: auto; }
+                    #periodResultText pre code { background: none; padding: 0; }
+                    #periodResultText blockquote { border-left: 4px solid #4a90e2; padding-left: 15px; margin: 15px 0; color: #666; }
+                </style>
+            </div>
         </div>
     </div>
     
@@ -1598,6 +1631,15 @@ HTML_TEMPLATE = """
             const errorDiv = document.getElementById('error');
             errorDiv.textContent = message;
             errorDiv.classList.add('active');
+        }
+        
+        // Toggle result container collapse/expand
+        // 切换结果容器的折叠/展开
+        function toggleResultContainer(containerId) {
+            const container = document.getElementById(containerId);
+            if (container) {
+                container.classList.toggle('collapsed');
+            }
         }
     </script>
 </body>
