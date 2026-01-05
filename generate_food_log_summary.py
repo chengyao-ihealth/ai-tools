@@ -2664,9 +2664,13 @@ def generate_weekly_or_monthly_insight(
         # Add language instruction to prompt
         # 在 prompt 中添加语言指令
         if language == 'zh':
-            prompt_text += "\n\nPlease respond in Chinese (Simplified)."
+            # For Chinese, specify exact title format
+            if period_type == 'weekly':
+                prompt_text += f"\n\n请用简体中文回复。所有标题、标题和内容都必须是中文。主标题应为：## 周营养洞察 ({start_date_str} 至 {end_date_str})。所有小节标题（如'整体周评估'、'周营养模式'等）也必须是中文。"
+            else:  # monthly
+                prompt_text += f"\n\n请用简体中文回复。所有标题、标题和内容都必须是中文。主标题应为：## 月度营养洞察 ({start_date_str} 至 {end_date_str})。所有小节标题（如'整体月度评估'、'长期营养趋势'等）也必须是中文。"
         else:
-            prompt_text += "\n\nPlease respond in English."
+            prompt_text += "\n\nPlease respond in English. All titles, headings, and content should be in English."
         
         # Call OpenAI
         print(f"[INFO] Calling OpenAI API to generate {period_type} insight...")
