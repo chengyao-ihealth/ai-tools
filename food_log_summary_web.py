@@ -1531,15 +1531,13 @@ HTML_TEMPLATE = r"""
                     periodProgress.textContent = t.periodLoading;
                 }
                 
-                const regenerate = document.getElementById('regenerateCheckbox').checked;
                 const response = await fetch('/api/generate-weekly-insight', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
                         patient_id: patientId,
                         date: selectedDate,
-                        language: currentLang,
-                        regenerate: regenerate
+                        language: currentLang
                     })
                 });
                 
