@@ -48,6 +48,7 @@ Based on the patient's food logs from the past week (at least 7 days), analyze t
    - Prioritize foods with the lowest scores as they represent the most critical nutritional concerns
 5. For each selected food swap:
    - Specify the original food and meal type
+   - **IMPORTANT: Include the food log image** for the original food (if available, use the image placeholder provided in the frequent foods list)
    - Provide the nutrition compliance score (already calculated in step 2)
    - Suggest a replacement food that:
      * Better aligns with the patient's medical conditions
@@ -55,6 +56,7 @@ Based on the patient's food logs from the past week (at least 7 days), analyze t
      * Respects dietary preferences and cultural background
      * Is age-appropriate
    - Explain the nutritional benefit of the swap
+   - Use Markdown image syntax to display the original food image: ![Original food: food name](IMAGE_PLACEHOLDER_X)
 
 ### Output Format:
 - Use clear headings and bullet points
@@ -62,6 +64,7 @@ Based on the patient's food logs from the past week (at least 7 days), analyze t
 - If no swaps needed (all scores >= 0.6): State "No food swaps are recommended at this time" and explain why
 - If swaps needed (any score < 0.6): List each swap (up to 3, prioritizing lowest scores) with:
   * Original food: [food name] (meal type)
+  * **Food log image**: Include the image directly using Markdown syntax: ![Original food: food name](IMAGE_PLACEHOLDER_X) where X matches the placeholder from the frequent foods list (do not add text like "食物日志图片:" or "Food log image:" before the image)
   * Nutrition compliance score: [score between 0.0 and 1.0] (lower score = less aligned with patient's nutritional needs)
   * Suggested replacement: [replacement food]
   * Reason: [nutritional benefit/alignment with patient needs]

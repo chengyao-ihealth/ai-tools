@@ -24,33 +24,77 @@ Please provide a comprehensive monthly nutrition insight that:
 6. Provides strategic recommendations for the upcoming month
 7. Highlights significant changes or improvements observed
 
-Format your response in plain text with clear sections. Use the following structure:
+Format your response using rich Markdown formatting to make it visually engaging and easy to read. Use the following structure with enhanced visual elements:
 
-## Monthly Nutrition Insight ({start_date} to {end_date})
+## 📊 Monthly Nutrition Insight ({start_date} to {end_date})
 
-### Overall Monthly Assessment
+### 🎯 Overall Monthly Assessment
 [Brief overall assessment of the month's nutrition trends]
+- Use bullet points with emoji icons (✅ for achievements, 📊 for trends, 🎯 for goals)
+- Include a summary table comparing key metrics if relevant
+- Use visual indicators to show overall progress
 
-### Long-term Nutritional Trends
+### 📈 Long-term Nutritional Trends
 [Analysis of patterns, trends, and habits observed throughout the month]
+- Use tables to show week-by-week or period comparisons
+- Use trend indicators (↑ ↓ → 📈 📉) to visualize changes
+- Format trends as structured lists with sub-items
+- Include specific data points and percentages when available
+- **CRITICAL: Include representative food log images** - When the summary mentions "Food log image available for [meal] on [date]", you MUST include the image using the exact placeholder provided (e.g., ![Meal description](IMAGE_PLACEHOLDER_0)). Use Markdown image syntax with the exact placeholder text as shown in the summary.
+- Show visual examples of typical meals from different periods to illustrate trends
 
-### Progress Evaluation
+### 📊 Progress Evaluation
 [Assessment of progress toward nutritional goals and adherence to recommendations]
+- Use progress indicators (🟢 🟡 🔴) or percentage bars
+- Format as tables comparing goals vs. actuals
+- Use checkmark lists (✅ ❌) for goal achievement
+- Include specific metrics and measurements
 
-### Persistent Patterns
+### 🔄 Persistent Patterns
 [Consistent habits, both positive and negative, observed across the month]
+- Use emoji categories: ✅ for positive patterns, ⚠️ for negative patterns
+- Format as organized lists with frequency indicators
+- Use bold text to highlight most significant patterns
+- Include specific examples and occurrences
 
-### Nutritional Variety and Balance
+### 🥗 Nutritional Variety and Balance
 [Evaluation of dietary diversity and nutritional balance over time]
+- Use tables to show food group distribution
+- Use visual indicators (🟩 🟨 🟧) for balance assessment
+- Format as structured lists with percentages or ratios
+- Include recommendations for improvement
 
-### Areas Requiring Attention
+### ⚠️ Areas Requiring Attention
 [Persistent nutritional concerns or gaps that need intervention]
+- Use warning emoji (⚠️ 🔴) for critical areas
+- Format concerns as prioritized lists (1️⃣ 2️⃣ 3️⃣)
+- Include severity indicators and impact assessment
+- Use bold text for urgent items
 
-### Strategic Recommendations
+### 💡 Strategic Recommendations
 [High-level recommendations for the upcoming month based on observed patterns]
+- Use numbered lists with emoji icons (1️⃣ 2️⃣ 3️⃣)
+- Format each recommendation with:
+  - **Goal**: [what to achieve]
+  - **Strategy**: [how to achieve it]
+  - **Timeline**: [when to implement]
+  - **Expected outcome**: [benefit]
+- Use checkboxes format: `- [ ]` for actionable items
+- Include milestone markers for tracking
 
-### Key Insights and Priorities
+### 🎯 Key Insights and Priorities
 [Summary of most critical insights and recommended focus areas]
+- Use a summary box format with top priorities
+- Highlight top 3-5 insights with emoji indicators (🏆 🎯 ⭐)
+- Use bold text for emphasis on critical points
+- Format as a quick reference guide
 
-Keep the insight strategic and focused on long-term patterns, trends, and outcomes rather than daily details.
+**Formatting Guidelines:**
+- Use Markdown tables extensively for data comparisons and summaries
+- Use emoji strategically to enhance readability and visual appeal
+- Use bold (**text**) and italic (*text*) for emphasis
+- Use code blocks or quote blocks for important notes or warnings
+- Use horizontal rules (---) to separate major sections
+- Use nested lists for hierarchical information
+- Keep the insight strategic and focused on long-term patterns, trends, and outcomes rather than daily details
 
