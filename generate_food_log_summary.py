@@ -2547,7 +2547,6 @@ def generate_weekly_or_monthly_insight(
             
             # Generate AI summaries for each meal if not cached
             daily_meal_summaries = []
-            total_food_logs_processed = 0
             for meal_type, logs in food_logs_by_meal.items():
                 for row in logs:
                     # Get image URLs from row (already fetched above)
@@ -2564,8 +2563,6 @@ def generate_weekly_or_monthly_insight(
                     if not image_urls:
                         continue
                     
-                    total_food_logs_processed += 1
-                    
                     # Get patient notes
                     patient_notes_text = None
                     description = row.get('Description') or row.get('note') or row.get('description')
@@ -2575,26 +2572,12 @@ def generate_weekly_or_monthly_insight(
                     # Get food_log_id
                     food_log_id = str(row.get('_id', '')) if hasattr(row.get('_id'), '__str__') else None
                     
-                    # Analyze each image and download to cache
+                    # Analyze each image
                     # Note: When generating weekly/monthly insight, we don't regenerate daily meal summaries
                     # even if regenerate=True, because regenerate should only affect the period insight cache
                     # 注意：生成 weekly/monthly insight 时，即使 regenerate=True，也不重新生成 daily meal summaries
                     # 因为 regenerate 应该只影响周期洞察缓存
-                    for image_index, img_url in enumerate(image_urls):
-                        # Download image to cache (if not already cached)
-                        # 下载图片到缓存（如果还没有缓存）
-                        images_dir = Path("./images")
-                        local_path = download_image_with_cache(
-                            img_url,
-                            images_dir,
-                            food_log_id=food_log_id,
-                            image_index=image_index,
-                            patient_id=patient_id,
-                            date=date_str,
-                            cache_db=cache_db,
-                            debug=debug
-                        )
-                        
+                    for img_url in image_urls:
                         summary = analyze_food_image_with_openai(
                             img_url,
                             openai_api_key=api_key,
@@ -2607,18 +2590,10 @@ def generate_weekly_or_monthly_insight(
                             debug=debug
                         )
                         if summary:
-                            # Get image filename for Flask route
-                            # 获取图片文件名用于 Flask 路由
-                            image_filename = None
-                            if local_path and local_path.exists():
-                                image_filename = local_path.name
-                            
                             daily_meal_summaries.append({
                                 'date': date_str,
                                 'meal_type': meal_type,
-                                'summary': summary,
-                                'image_url': img_url,  # Original URL for reference
-                                'image_filename': image_filename  # Local filename for display
+                                'summary': summary
                             })
             
             if daily_meal_summaries:
@@ -2627,102 +2602,22 @@ def generate_weekly_or_monthly_insight(
                     'summaries': daily_meal_summaries
                 })
         
-        # Count total food logs processed across all days
-        total_food_logs = sum(len(daily['summaries']) for daily in daily_summaries)
-        print(f"[INFO] Processed {total_food_logs} food log AI summaries across {len(daily_summaries)} days")
+        print(f"[INFO] Generated {len(daily_summaries)} daily summaries")
         
         if not daily_summaries:
             print("[WARN] No daily summaries generated")
             return None
         
-        # Format summary text for prompt (include cached image paths and daily food variations)
+        # Format summary text for prompt
         summary_text = ""
-        # Store image references for post-processing
-        image_references = []  # List of (placeholder, actual_path) tuples
-        
-        # For weekly insights, limit to 2-3 representative images
-        # 对于 weekly insights，限制为 2-3 张代表性图片
-        if period_type == 'weekly':
-            # Select 2-3 representative images (one per day, prioritizing days with notable patterns)
-            # 选择 2-3 张代表性图片（每天一张，优先选择有显著模式的日子）
-            selected_images = []
-            for daily in daily_summaries:
-                # For each day, select the first meal with an image (or most representative)
-                # 对于每一天，选择第一餐有图片的（或最有代表性的）
-                for meal_summary in daily['summaries']:
-                    image_filename = meal_summary.get('image_filename')
-                    if image_filename:
-                        selected_images.append({
-                            'date': daily['date'],
-                            'meal_type': meal_summary['meal_type'],
-                            'image_filename': image_filename,
-                            'summary': meal_summary['summary']
-                        })
-                        break  # Only one image per day
-                # Limit to 3 images total
-                if len(selected_images) >= 3:
-                    break
-        else:
-            # For monthly, include all images (or more)
-            # 对于 monthly，包含所有图片（或更多）
-            selected_images = []
-            for daily in daily_summaries:
-                for meal_summary in daily['summaries']:
-                    image_filename = meal_summary.get('image_filename')
-                    if image_filename:
-                        selected_images.append({
-                            'date': daily['date'],
-                            'meal_type': meal_summary['meal_type'],
-                            'image_filename': image_filename,
-                            'summary': meal_summary['summary']
-                        })
-        
         for daily in daily_summaries:
             summary_text += f"\n\nDate: {daily['date']}\n"
-            # Collect all foods for this day to show daily variation
-            daily_foods = []
             for meal_summary in daily['summaries']:
-                meal_type = meal_summary['meal_type']
-                summary = meal_summary['summary']
-                image_filename = meal_summary.get('image_filename')
-                
-                summary_text += f"\nMeal: {meal_type}\n"
-                
-                # Only include image placeholder if this image is in the selected set
-                # 只有当这张图片在选中集合中时才包含图片占位符
-                is_selected = any(
-                    img['date'] == daily['date'] and 
-                    img['meal_type'] == meal_type and 
-                    img['image_filename'] == image_filename
-                    for img in selected_images
-                )
-                
-                if image_filename and is_selected:
-                    # Use placeholder that we'll replace later with actual image path
-                    # 使用占位符，稍后替换为实际图片路径
-                    placeholder = f"IMAGE_PLACEHOLDER_{len(image_references)}"
-                    image_references.append((placeholder, image_filename))
-                    # Provide clear instruction for AI to use the image selectively
-                    # 为 AI 提供清晰的图片使用说明，要求选择性使用
-                    if period_type == 'weekly':
-                        summary_text += f"Food log image available for {meal_type} on {daily['date']}: Use this image ONLY if it helps illustrate a key point or notable pattern. Use Markdown syntax: ![Meal description]({placeholder})\n"
-                    else:
-                        summary_text += f"Food log image available for {meal_type} on {daily['date']}: Use this exact Markdown syntax in your response: ![Meal description]({placeholder})\n"
-                summary_text += f"AI Title: {summary.get('ai_title', 'N/A')}\n"
-                foods = summary.get('detected_foods', [])
-                if foods:
-                    summary_text += f"Foods: {', '.join(foods)}\n"
-                    daily_foods.extend(foods)
-                summary_text += f"Composition: {summary.get('composition', {})}\n"
-                observations = summary.get('observations', [])
-                if observations:
-                    summary_text += f"Observations: {', '.join(observations)}\n"
-            
-            # Add daily food variation summary
-            if daily_foods:
-                from collections import Counter
-                food_counts = Counter(daily_foods)
-                summary_text += f"\nDaily Food Summary: {len(set(daily_foods))} unique foods, most frequent: {', '.join([f'{food}({count}x)' for food, count in food_counts.most_common(3)])}\n"
+                summary_text += f"Meal: {meal_summary['meal_type']}\n"
+                summary_text += f"AI Title: {meal_summary['summary'].get('ai_title', 'N/A')}\n"
+                summary_text += f"Foods: {', '.join(meal_summary['summary'].get('detected_foods', []))}\n"
+                summary_text += f"Composition: {meal_summary['summary'].get('composition', {})}\n"
+                summary_text += f"Observations: {', '.join(meal_summary['summary'].get('observations', []))}\n"
         
         # Load prompt template
         if prompt_file is None:
@@ -2795,78 +2690,6 @@ def generate_weekly_or_monthly_insight(
             
             insight_text = response.choices[0].message.content
             print(f"[INFO] Generated {period_type} insight: {len(insight_text)} characters")
-            
-            # Clean up any incorrect placeholder usage - do this comprehensively before replacement
-            # 清理任何不正确的占位符使用 - 在替换之前全面清理
-            import re
-            for placeholder, image_filename in image_references if image_references else []:
-                if not image_filename:
-                    continue
-                
-                # Comprehensive cleanup: remove any file extensions or paths around the placeholder
-                # 全面清理：移除占位符周围的任何文件扩展名或路径
-                
-                # Pattern 1: Remove extensions after placeholder (e.g., IMAGE_PLACEHOLDER_0.jpg)
-                # 模式1：移除占位符后的扩展名（例如，IMAGE_PLACEHOLDER_0.jpg）
-                pattern1 = re.escape(placeholder) + r'\.(jpg|jpeg|png|gif|webp)'
-                insight_text = re.sub(pattern1, placeholder, insight_text)
-                
-                # Pattern 2: Remove paths/extensions before placeholder in parentheses (e.g., ![desc](xxx.jpgIMAGE_PLACEHOLDER_0))
-                # 模式2：移除括号内占位符前的路径/扩展名（例如，![desc](xxx.jpgIMAGE_PLACEHOLDER_0)）
-                pattern2 = r'\([^\)]*?[^\s\)]+\.(jpg|jpeg|png|gif|webp)' + re.escape(placeholder) + r'\)'
-                insight_text = re.sub(pattern2, r'(' + placeholder + r')', insight_text)
-                
-                # Pattern 3: Remove paths/extensions before placeholder outside parentheses
-                # 模式3：移除括号外占位符前的路径/扩展名
-                pattern3 = r'[^\s\)]+\.(jpg|jpeg|png|gif|webp)' + re.escape(placeholder)
-                insight_text = re.sub(pattern3, placeholder, insight_text)
-            
-            # Replace image placeholders with actual Flask routes
-            # 将图片占位符替换为实际的 Flask 路由
-            if image_references:
-                replaced_count = 0
-                for placeholder, image_filename in image_references:
-                    if not image_filename:
-                        if debug:
-                            print(f"[DEBUG] Skipping placeholder {placeholder}: no image filename")
-                        continue
-                    
-                    # Replace placeholder with Flask route path
-                    # 将占位符替换为 Flask 路由路径
-                    flask_image_path = f"/images/{image_filename}"
-                    # Use regex to match placeholder
-                    # 使用正则表达式匹配占位符
-                    pattern = re.escape(placeholder)
-                    if re.search(pattern, insight_text):
-                        insight_text = re.sub(pattern, flask_image_path, insight_text)
-                        replaced_count += 1
-                        if debug:
-                            print(f"[DEBUG] Replaced {placeholder} with {flask_image_path}")
-                    elif debug:
-                        print(f"[DEBUG] Placeholder {placeholder} not found in insight text")
-                
-                # Final validation: fix any incorrect paths that might have been generated
-                # 最终验证：修复任何可能生成的错误路径
-                # Check for patterns like /images/xxx.jpg0, /images/xxx.jpg1, etc.
-                # 检查类似 /images/xxx.jpg0, /images/xxx.jpg1 等的模式
-                incorrect_path_pattern = r'(/images/[^\s\)]+\.(jpg|jpeg|png|gif|webp))\d+'
-                def fix_incorrect_path(match):
-                    # Remove trailing digits after file extension
-                    # 移除文件扩展名后的尾随数字
-                    base_path = match.group(1)
-                    if debug:
-                        print(f"[DEBUG] Fixed incorrect path: {match.group(0)} -> {base_path}")
-                    return base_path
-                
-                if re.search(incorrect_path_pattern, insight_text):
-                    insight_text = re.sub(incorrect_path_pattern, fix_incorrect_path, insight_text)
-                    if debug:
-                        print(f"[DEBUG] Fixed incorrect image paths in insight text")
-                
-                print(f"[INFO] Replaced {replaced_count}/{len(image_references)} image placeholders with Flask routes for {period_type} insight")
-            else:
-                if debug:
-                    print(f"[DEBUG] No image references found for {period_type} insight")
             
             # Save to cache
             # 保存到缓存
@@ -3089,23 +2912,9 @@ def generate_food_swapping_advice(
             if pd.isna(meal_type):
                 meal_type = 'Other'
             
-            # Analyze first image to get AI summary and download image to cache
+            # Analyze first image to get AI summary
             if image_urls:
-                for image_index, img_url in enumerate(image_urls[:1]):  # Analyze first image only
-                    # Download image to cache (if not already cached)
-                    # 下载图片到缓存（如果还没有缓存）
-                    images_dir = Path("./images")
-                    local_path = download_image_with_cache(
-                        img_url,
-                        images_dir,
-                        food_log_id=food_log_id,
-                        image_index=image_index,
-                        patient_id=patient_id,
-                        date=food_log_date,
-                        cache_db=cache_db,
-                        debug=debug
-                    )
-                    
+                for img_url in image_urls[:1]:  # Analyze first image only
                     summary = analyze_food_image_with_openai(
                         img_url,
                         openai_api_key=api_key,
@@ -3118,18 +2927,10 @@ def generate_food_swapping_advice(
                         debug=debug
                     )
                     if summary:
-                        # Get image filename for Flask route
-                        # 获取图片文件名用于 Flask 路由
-                        image_filename = None
-                        if local_path and local_path.exists():
-                            image_filename = local_path.name
-                        
                         all_meal_summaries.append({
                             'date': food_log_date,
                             'meal_type': meal_type,
-                            'summary': summary,
-                            'image_url': img_url,  # Original URL for reference
-                            'image_filename': image_filename  # Local filename for display
+                            'summary': summary
                         })
                     break
         
@@ -3166,42 +2967,12 @@ def generate_food_swapping_advice(
             counter = Counter(foods)
             frequent_foods_summary[meal_type] = dict(counter.most_common(10))
         
-        # Format frequent foods summary for prompt (include image references)
+        # Format frequent foods summary for prompt
         frequent_foods_text = ""
-        # Store image references for post-processing
-        image_references = []  # List of (placeholder, image_filename) tuples
-        
         for meal_type, foods in frequent_foods_summary.items():
             frequent_foods_text += f"\n{meal_type}:\n"
             for food, count in foods.items():
-                frequent_foods_text += f"  - {food} (appeared {count} time(s))"
-                
-                # Find corresponding image for this food
-                # 找到这个食物对应的图片
-                for entry in all_meal_summaries:
-                    if entry['meal_type'] == meal_type:
-                        summary = entry['summary']
-                        # Check if this food matches the entry
-                        food_matches = False
-                        if 'ai_title' in summary and food.lower() in summary['ai_title'].lower():
-                            food_matches = True
-                        elif 'food_items' in summary:
-                            if isinstance(summary['food_items'], list):
-                                food_matches = any(food.lower() in str(item).lower() for item in summary['food_items'])
-                            elif isinstance(summary['food_items'], str):
-                                food_matches = food.lower() in summary['food_items'].lower()
-                        
-                        if food_matches and entry.get('image_filename'):
-                            # Use placeholder that we'll replace later with actual image path
-                            # 使用占位符，稍后替换为实际图片路径
-                            placeholder = f"IMAGE_PLACEHOLDER_{len(image_references)}"
-                            image_references.append((placeholder, entry['image_filename']))
-                            # Just add placeholder without text description to avoid line break issues
-                            # 只添加占位符，不添加文字说明，避免换行问题
-                            frequent_foods_text += f" {placeholder}"
-                            break
-                
-                frequent_foods_text += "\n"
+                frequent_foods_text += f"  - {food} (appeared {count} time(s))\n"
         
         # Prepare patient information for prompt
         patient_background = patient_info.get('background', 'Not specified')
@@ -3258,75 +3029,6 @@ def generate_food_swapping_advice(
             
             advice_text = response.choices[0].message.content
             print(f"[INFO] Generated food swapping advice: {len(advice_text)} characters")
-            
-            # Clean up any incorrect placeholder usage - do this comprehensively before replacement
-            # 清理任何不正确的占位符使用 - 在替换之前全面清理
-            import re
-            for placeholder, image_filename in image_references if image_references else []:
-                if not image_filename:
-                    continue
-                
-                # Comprehensive cleanup: remove any file extensions or paths around the placeholder
-                # 全面清理：移除占位符周围的任何文件扩展名或路径
-                
-                # Pattern 1: Remove extensions after placeholder (e.g., IMAGE_PLACEHOLDER_0.jpg)
-                # 模式1：移除占位符后的扩展名（例如，IMAGE_PLACEHOLDER_0.jpg）
-                pattern1 = re.escape(placeholder) + r'\.(jpg|jpeg|png|gif|webp)'
-                advice_text = re.sub(pattern1, placeholder, advice_text)
-                
-                # Pattern 2: Remove paths/extensions before placeholder in parentheses (e.g., ![desc](xxx.jpgIMAGE_PLACEHOLDER_0))
-                # 模式2：移除括号内占位符前的路径/扩展名（例如，![desc](xxx.jpgIMAGE_PLACEHOLDER_0)）
-                pattern2 = r'\([^\)]*?[^\s\)]+\.(jpg|jpeg|png|gif|webp)' + re.escape(placeholder) + r'\)'
-                advice_text = re.sub(pattern2, r'(' + placeholder + r')', advice_text)
-                
-                # Pattern 3: Remove paths/extensions before placeholder outside parentheses
-                # 模式3：移除括号外占位符前的路径/扩展名
-                pattern3 = r'[^\s\)]+\.(jpg|jpeg|png|gif|webp)' + re.escape(placeholder)
-                advice_text = re.sub(pattern3, placeholder, advice_text)
-            
-            # Replace image placeholders with actual Flask routes
-            # 将图片占位符替换为实际的 Flask 路由
-            if image_references:
-                replaced_count = 0
-                for placeholder, image_filename in image_references:
-                    if not image_filename:
-                        if debug:
-                            print(f"[DEBUG] Skipping placeholder {placeholder}: no image filename")
-                        continue
-                    
-                    # Replace placeholder with Flask route path
-                    # 将占位符替换为 Flask 路由路径
-                    flask_image_path = f"/images/{image_filename}"
-                    # Use regex to match placeholder
-                    # 使用正则表达式匹配占位符
-                    pattern = re.escape(placeholder)
-                    if re.search(pattern, advice_text):
-                        advice_text = re.sub(pattern, flask_image_path, advice_text)
-                        replaced_count += 1
-                        if debug:
-                            print(f"[DEBUG] Replaced {placeholder} with {flask_image_path}")
-                    elif debug:
-                        print(f"[DEBUG] Placeholder {placeholder} not found in advice text")
-                
-                # Final validation: fix any incorrect paths that might have been generated
-                # 最终验证：修复任何可能生成的错误路径
-                # Check for patterns like /images/xxx.jpg0, /images/xxx.jpg1, etc.
-                # 检查类似 /images/xxx.jpg0, /images/xxx.jpg1 等的模式
-                incorrect_path_pattern = r'(/images/[^\s\)]+\.(jpg|jpeg|png|gif|webp))\d+'
-                def fix_incorrect_path(match):
-                    # Remove trailing digits after file extension
-                    # 移除文件扩展名后的尾随数字
-                    base_path = match.group(1)
-                    if debug:
-                        print(f"[DEBUG] Fixed incorrect path: {match.group(0)} -> {base_path}")
-                    return base_path
-                
-                if re.search(incorrect_path_pattern, advice_text):
-                    advice_text = re.sub(incorrect_path_pattern, fix_incorrect_path, advice_text)
-                    if debug:
-                        print(f"[DEBUG] Fixed incorrect image paths in advice text")
-                
-                print(f"[INFO] Replaced {replaced_count}/{len(image_references)} image placeholders with Flask routes")
             
             # Save to cache
             # 保存到缓存

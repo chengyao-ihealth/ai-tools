@@ -670,122 +670,6 @@ HTML_TEMPLATE = r"""
                     #periodResultText pre { background: #f4f4f4; padding: 15px; border-radius: 5px; overflow-x: auto; }
                     #periodResultText pre code { background: none; padding: 0; }
                     #periodResultText blockquote { border-left: 4px solid #4a90e2; padding-left: 15px; margin: 15px 0; color: #666; }
-                    /* Table styles for rich formatting */
-                    #periodResultText table {
-                        width: 100%;
-                        border-collapse: separate;
-                        border-spacing: 0;
-                        margin: 25px 0;
-                        background: white;
-                        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-                        border-radius: 8px;
-                        overflow: hidden;
-                    }
-                    #periodResultText table th {
-                        background: linear-gradient(135deg, #4a90e2 0%, #357abd 100%);
-                        color: white;
-                        padding: 16px 24px;
-                        text-align: left;
-                        font-weight: 700;
-                        font-size: 15px;
-                        letter-spacing: 0.5px;
-                        border-right: 1px solid rgba(255,255,255,0.2);
-                    }
-                    #periodResultText table th:last-child {
-                        border-right: none;
-                    }
-                    #periodResultText table td {
-                        padding: 14px 24px;
-                        border-bottom: 1px solid #e8e8e8;
-                        border-right: 1px solid #f0f0f0;
-                        font-size: 14px;
-                        line-height: 1.7;
-                        vertical-align: middle;
-                    }
-                    #periodResultText table td:last-child {
-                        border-right: none;
-                    }
-                    #periodResultText table td:first-child {
-                        font-weight: 600;
-                        color: #2c3e50;
-                    }
-                    #periodResultText table tr:last-child td {
-                        border-bottom: none;
-                    }
-                    #periodResultText table tr:nth-child(even) {
-                        background: #f8f9fa;
-                    }
-                    #periodResultText table tr:hover {
-                        background: #e3f2fd;
-                        transition: background-color 0.2s ease;
-                    }
-                    /* Image styles in tables and content - match daily summary size */
-                    /* Use !important to ensure size limits are applied */
-                    #periodResultText img,
-                    #periodResultText p img,
-                    #periodResultText li img,
-                    #periodResultText td img,
-                    #periodResultText .image-item img,
-                    #periodResultText .image-grid img,
-                    #periodResultText img[src],
-                    #periodResultText img[src*="/images/"] {
-                        max-width: 220px !important;
-                        max-height: 220px !important;
-                        width: auto !important;
-                        height: auto !important;
-                        border-radius: 8px;
-                        margin: 8px 12px 8px 0;
-                        box-shadow: 0 2px 6px rgba(0,0,0,0.15);
-                        object-fit: cover;
-                        display: inline-block;
-                        vertical-align: middle;
-                    }
-                    /* Additional override for any inline styles */
-                    #periodResultText img[style*="width"],
-                    #periodResultText img[style*="height"] {
-                        max-width: 220px !important;
-                        max-height: 220px !important;
-                    }
-                    #periodResultText p img, #periodResultText li img, #periodResultText td img {
-                        margin: 8px 12px 8px 0;
-                    }
-                    #periodResultText .image-grid {
-                        display: flex;
-                        flex-wrap: wrap;
-                        gap: 15px;
-                        margin: 15px 0;
-                    }
-                    #periodResultText .image-item {
-                        text-align: center;
-                        display: inline-block;
-                    }
-                    #periodResultText .image-item img {
-                        margin: 0 auto;
-                        display: block;
-                    }
-                    #periodResultText .image-caption {
-                        font-size: 12px;
-                        color: #666;
-                        margin-top: 8px;
-                        font-style: italic;
-                        text-align: center;
-                    }
-                    /* Horizontal rule styling */
-                    #periodResultText hr {
-                        border: none;
-                        border-top: 2px solid #e0e0e0;
-                        margin: 30px 0;
-                    }
-                    /* Checkbox list styling */
-                    #periodResultText input[type="checkbox"] {
-                        margin-right: 8px;
-                    }
-                    /* Emoji and icon spacing */
-                    #periodResultText h2, #periodResultText h3 {
-                        display: flex;
-                        align-items: center;
-                        gap: 8px;
-                    }
                     /* Style for nutrition compliance scores */
                     #periodResultText .nutrition-score {
                         display: inline-block;
@@ -1678,19 +1562,6 @@ HTML_TEMPLATE = r"""
                     // Render markdown to HTML
                     if (typeof marked !== 'undefined') {
                         periodResultText.innerHTML = marked.parse(data.insight);
-                        // Force image size after rendering
-                        const images = periodResultText.querySelectorAll('img');
-                        images.forEach(img => {
-                            img.style.maxWidth = '220px';
-                            img.style.maxHeight = '220px';
-                            img.style.width = 'auto';
-                            img.style.height = 'auto';
-                            // Hide image if it fails to load
-                            img.onerror = function() {
-                                console.warn('Image failed to load:', this.src);
-                                this.style.display = 'none';
-                            };
-                        });
                     } else {
                         // Fallback: escape HTML and preserve line breaks
                         const escaped = data.insight.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -1778,19 +1649,6 @@ HTML_TEMPLATE = r"""
                     // Render markdown to HTML
                     if (typeof marked !== 'undefined') {
                         periodResultText.innerHTML = marked.parse(data.insight);
-                        // Force image size after rendering
-                        const images = periodResultText.querySelectorAll('img');
-                        images.forEach(img => {
-                            img.style.maxWidth = '220px';
-                            img.style.maxHeight = '220px';
-                            img.style.width = 'auto';
-                            img.style.height = 'auto';
-                            // Hide image if it fails to load
-                            img.onerror = function() {
-                                console.warn('Image failed to load:', this.src);
-                                this.style.display = 'none';
-                            };
-                        });
                     } else {
                         // Fallback: escape HTML and preserve line breaks
                         const escaped = data.insight.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -1895,19 +1753,6 @@ HTML_TEMPLATE = r"""
                             }
                         );
                         periodResultText.innerHTML = adviceHtml;
-                        // Force image size after rendering
-                        const images = periodResultText.querySelectorAll('img');
-                        images.forEach(img => {
-                            img.style.maxWidth = '220px';
-                            img.style.maxHeight = '220px';
-                            img.style.width = 'auto';
-                            img.style.height = 'auto';
-                            // Hide image if it fails to load
-                            img.onerror = function() {
-                                console.warn('Image failed to load:', this.src);
-                                this.style.display = 'none';
-                            };
-                        });
                     } else {
                         // Fallback: escape HTML and preserve line breaks
                         const escaped = data.advice.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -2248,15 +2093,7 @@ def api_generate_summary():
 @app.route('/images/<path:filename>')
 def serve_image(filename):
     """Serve images from images directory."""
-    try:
-        image_path = IMAGES_DIR / filename
-        if not image_path.exists():
-            print(f"[WARN] Image not found: {image_path}")
-            return jsonify({"error": "Image not found"}), 404
-        return send_from_directory(str(IMAGES_DIR), filename)
-    except Exception as e:
-        print(f"[ERROR] Error serving image {filename}: {e}")
-        return jsonify({"error": str(e)}), 500
+    return send_from_directory(str(IMAGES_DIR), filename)
 
 
 def _generate_cache_for_patient_internal(patient_id: str, check_criteria: bool = False):

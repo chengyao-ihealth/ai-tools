@@ -23,57 +23,30 @@ Please provide a comprehensive weekly nutrition insight that:
 5. Provides specific weekly recommendations for improvement
 6. Compares daily variations and identifies days that need attention
 
-Format your response using rich Markdown formatting to make it visually engaging and easy to read. Use the following structure with enhanced visual elements:
+Format your response in plain text with clear sections. Use the following structure:
 
-## 📊 Weekly Nutrition Insight ({start_date} to {end_date})
+## Weekly Nutrition Insight ({start_date} to {end_date})
 
-### 🎯 Overall Weekly Assessment
+### Overall Weekly Assessment
 [Brief overall assessment of the week's nutrition patterns]
-- Use bullet points with emoji icons (✅ for positive, ⚠️ for concerns, 📈 for trends)
-- Include a brief summary table if helpful
 
-### ✅ Nutritional Strengths
+### Weekly Nutritional Patterns
+[Analysis of consistent patterns, trends, and habits across the week]
+
+### Nutritional Strengths
 [Positive patterns and habits observed throughout the week]
-- Use checkmark emoji (✅) or star emoji (⭐) for key strengths
-- Format as bullet lists with bold text for emphasis
-- Include specific examples with quantities or frequencies
 
-### ⚠️ Areas of Concern
+### Areas of Concern
 [Consistent nutritional concerns or gaps across multiple days]
-- Use warning emoji (⚠️) or alert emoji (🔴) for concerns
-- Format concerns as bullet lists with clear explanations
-- Include actionable items for each concern
-- **IMPORTANT: Use 2-3 representative food log images here** - Select only the most relevant images that help illustrate key concerns or notable patterns. When the summary mentions "Food log image available for [meal] on [date]", include the image ONLY if it helps illustrate a concern or notable pattern. Use Markdown image syntax with the exact placeholder text (e.g., ![Meal description](IMAGE_PLACEHOLDER_0)). Do NOT include all available images - be selective and use only 2-3 images maximum in this section.
 
-### 📅 Daily Variations
-[Analysis of day-to-day differences and what they indicate - this section should summarize both daily patterns and weekly trends]
-- **IMPORTANT: Include a comprehensive overview of daily food changes and weekly patterns** - summarize what foods were eaten each day, how they varied, and identify consistent patterns across the week
-- Use a table format to compare days when helpful (include columns: Date, Key Foods, Meal Patterns, Notable Changes)
-- Use emoji indicators (📊 📉 📈) to show variations
-- Highlight significant differences with bold text
-- For each day, provide a brief summary of the foods consumed and how they differ from other days
-- Identify and summarize consistent weekly patterns and trends observed across all days
+### Daily Variations
+[Analysis of day-to-day differences and what they indicate]
 
-### 💡 Weekly Recommendations
+### Weekly Recommendations
 [Specific, actionable recommendations for the upcoming week based on observed patterns]
-- Use numbered lists with emoji icons (1️⃣ 2️⃣ 3️⃣)
-- Format each recommendation with:
-  - **What to do**: [specific action]
-  - **Why**: [reasoning]
-  - **Expected benefit**: [outcome]
-- Use checkboxes format: `- [ ]` for actionable items
 
-### 🎯 Key Takeaways
+### Key Takeaways
 [Summary of most important insights and priorities for improvement]
-- Use a summary box format with key points
-- Highlight top 3-5 priorities with emoji indicators
-- Use bold text for emphasis on critical points
 
-**Formatting Guidelines:**
-- Use Markdown tables for data comparisons
-- Use emoji strategically to enhance readability (but don't overuse)
-- Use bold (**text**) and italic (*text*) for emphasis
-- Use code blocks or quote blocks for important notes
-- Use horizontal rules (---) to separate major sections
-- Keep the insight comprehensive but focused, emphasizing patterns and trends rather than individual day details
+Keep the insight comprehensive but focused, emphasizing patterns and trends rather than individual day details.
 
