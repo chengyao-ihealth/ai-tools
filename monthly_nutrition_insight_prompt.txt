@@ -89,7 +89,11 @@ Format your response using rich Markdown formatting to make it visually engaging
 - Use bold text for emphasis on critical points
 - Format as a quick reference guide
 
-**Formatting Guidelines:**
+---
+
+**IMPORTANT: DO NOT include the following formatting guidelines in your response. These are instructions for you only:**
+
+Formatting Guidelines (internal instructions only - do not output these):
 - Use Markdown tables extensively for data comparisons and summaries
 - Use emoji strategically to enhance readability and visual appeal
 - Use bold (**text**) and italic (*text*) for emphasis
@@ -97,4 +101,6 @@ Format your response using rich Markdown formatting to make it visually engaging
 - Use horizontal rules (---) to separate major sections
 - Use nested lists for hierarchical information
 - Keep the insight strategic and focused on long-term patterns, trends, and outcomes rather than daily details
+
+End your response after the "Key Insights and Priorities" section. Do not include any formatting guidelines or meta-instructions in your output.
 

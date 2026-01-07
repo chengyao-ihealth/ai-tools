@@ -734,7 +734,7 @@ HTML_TEMPLATE = r"""
                         width: auto !important;
                         height: auto !important;
                         border-radius: 8px;
-                        margin: 8px 12px 8px 0;
+                        margin: 15px 15px 15px 15px;
                         box-shadow: 0 2px 6px rgba(0,0,0,0.15);
                         object-fit: cover;
                         display: inline-block;
@@ -746,8 +746,15 @@ HTML_TEMPLATE = r"""
                         max-width: 220px !important;
                         max-height: 220px !important;
                     }
-                    #periodResultText p img, #periodResultText li img, #periodResultText td img {
+                    /* Improved spacing for images in paragraphs and lists - better separation from text */
+                    #periodResultText p img, #periodResultText li img {
+                        margin: 20px auto 20px auto !important;
+                        display: block !important;
+                    }
+                    /* Keep inline display for table cells */
+                    #periodResultText td img {
                         margin: 8px 12px 8px 0;
+                        display: inline-block;
                     }
                     #periodResultText .image-grid {
                         display: flex;

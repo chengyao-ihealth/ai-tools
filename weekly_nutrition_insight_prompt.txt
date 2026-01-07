@@ -69,11 +69,17 @@ Format your response using rich Markdown formatting to make it visually engaging
 - Highlight top 3-5 priorities with emoji indicators
 - Use bold text for emphasis on critical points
 
-**Formatting Guidelines:**
+---
+
+**IMPORTANT: DO NOT include the following formatting guidelines in your response. These are instructions for you only:**
+
+Formatting Guidelines (internal instructions only - do not output these):
 - Use Markdown tables for data comparisons
 - Use emoji strategically to enhance readability (but don't overuse)
 - Use bold (**text**) and italic (*text*) for emphasis
 - Use code blocks or quote blocks for important notes
 - Use horizontal rules (---) to separate major sections
 - Keep the insight comprehensive but focused, emphasizing patterns and trends rather than individual day details
+
+End your response after the "Key Takeaways" section. Do not include any formatting guidelines or meta-instructions in your output.
 
