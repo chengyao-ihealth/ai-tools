@@ -82,4 +82,3 @@ Formatting Guidelines (internal instructions only - do not output these):
 - Keep the insight comprehensive but focused, emphasizing patterns and trends rather than individual day details
 
 End your response after the "Key Takeaways" section. Do not include any formatting guidelines or meta-instructions in your output.
-

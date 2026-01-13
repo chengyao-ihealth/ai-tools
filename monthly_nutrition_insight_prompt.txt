@@ -103,4 +103,3 @@ Formatting Guidelines (internal instructions only - do not output these):
 - Keep the insight strategic and focused on long-term patterns, trends, and outcomes rather than daily details
 
 End your response after the "Key Insights and Priorities" section. Do not include any formatting guidelines or meta-instructions in your output.
-
