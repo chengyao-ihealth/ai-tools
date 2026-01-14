@@ -434,7 +434,7 @@ def get_display_columns(df: pd.DataFrame) -> List[str]:
     return display_columns
 
 
-def build_card_html(row, images_dir: Path, display_columns: List[str]) -> str:
+def build_card_html(row, images_dir: Path, display_columns: List[str], row_idx: Any = None) -> str:
     """
     Build HTML card for a single food log entry with dynamic columns.
     为单个食物记录构建HTML卡片，支持动态列。
@@ -510,7 +510,7 @@ def build_card_html(row, images_dir: Path, display_columns: List[str]) -> str:
         if col == "ImgName":
             continue  # Skip ImgName as it's handled separately
         
-        value = row.get(col, "")
+        value = row[col] if col in row.index else ""
         formatted_value = format_field_value(value, col)
         
         # Determine if this field should allow HTML (like Ingredients)
@@ -520,14 +520,48 @@ def build_card_html(row, images_dir: Path, display_columns: List[str]) -> str:
         if formatted_value:
             field_html.append(para(col, formatted_value, escape_html=not allow_html))
 
+    # Get FoodLogId for form identification (use index if FoodLogId not available)
+    # 获取FoodLogId用于表单标识（如果FoodLogId不可用，使用索引）
+    foodlog_id = ""
+    if "FoodLogId" in row.index:
+        foodlog_id_val = row["FoodLogId"]
+        foodlog_id = str(foodlog_id_val) if pd.notna(foodlog_id_val) else ""
+    if not foodlog_id and row_idx is not None:
+        # Fallback: use row index as identifier
+        # 备用方案：使用行索引作为标识符
+        foodlog_id = str(row_idx)
+
+    # Add review form
+    # 添加review表单（用于标注AI生成内容的质量）
+    review_form = f"""
+        <div class="review-form">
+            <div class="review-form-title">Add RD Review</div>
+            <div class="review-form-hint">For labeling the quality of AI-generated content</div>
+            <form class="rd-review-form" data-foodlog-id="{html.escape(foodlog_id)}">
+                <div class="form-group">
+                    <label for="rd-name-{html.escape(foodlog_id)}">RD Name:</label>
+                    <input type="text" id="rd-name-{html.escape(foodlog_id)}" name="rd_name" class="form-input" required />
+                </div>
+                <div class="form-group">
+                    <label for="rd-review-{html.escape(foodlog_id)}">Review (AI Content Quality Assessment):</label>
+                    <textarea id="rd-review-{html.escape(foodlog_id)}" name="rd_review" class="form-textarea" rows="3" placeholder="Please assess the quality of AI-generated content..." required></textarea>
+                </div>
+                <button type="submit" class="submit-btn">Submit</button>
+                <div class="form-status"></div>
+            </form>
+            <div class="review-display" id="review-display-{html.escape(foodlog_id)}"></div>
+        </div>
+    """
+
     return f"""
-    <div class="card">
+    <div class="card" data-foodlog-id="{html.escape(foodlog_id)}">
         <div class="images">
             {''.join(img_tags)}
         </div>
         <div class="meta">
             {''.join(field_html)}
         </div>
+        {review_form}
     </div>
     """
 
@@ -637,17 +671,161 @@ h1 {{
 .footer {{
   margin-top: 18px; color: var(--muted); font-size: 12px;
 }}
+.review-form {{
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}}
+.review-form-title {{
+  font-size: 14px; font-weight: 600; margin-bottom: 6px; color: var(--text);
+}}
+.review-form-hint {{
+  font-size: 11px; color: var(--muted); margin-bottom: 10px; font-style: italic;
+}}
+.form-group {{
+  margin-bottom: 10px;
+}}
+.form-group label {{
+  display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px;
+}}
+.form-input, .form-textarea {{
+  width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px;
+  font-size: 13px; font-family: inherit; background: var(--card); color: var(--text);
+}}
+.form-input:focus, .form-textarea:focus {{
+  outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(59,130,246,0.1);
+}}
+.form-textarea {{
+  resize: vertical; min-height: 60px;
+}}
+.submit-btn {{
+  padding: 8px 16px; background: var(--accent); color: white; border: none;
+  border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer;
+  transition: background 0.2s;
+}}
+.submit-btn:hover {{
+  background: #2563eb;
+}}
+.submit-btn:disabled {{
+  background: var(--muted); cursor: not-allowed;
+}}
+.form-status {{
+  margin-top: 8px; font-size: 12px; min-height: 16px;
+}}
+.form-status.success {{
+  color: #10b981;
+}}
+.form-status.error {{
+  color: #ef4444;
+}}
+.review-display {{
+  margin-top: 12px; padding: 10px; background: #f0f9ff; border: 1px solid #bae6fd;
+  border-radius: 6px; display: none;
+}}
+.review-display.show {{
+  display: block;
+}}
+.review-display-header {{
+  font-size: 13px; font-weight: 600; margin-bottom: 6px; color: var(--text);
+}}
+.review-display-content {{
+  font-size: 13px; line-height: 1.5; color: var(--text);
+}}
+.review-display-meta {{
+  font-size: 11px; color: var(--muted); margin-top: 6px;
+}}
 </style>
 </head>
 <body>
   <div class="header">
     <h1>{html.escape(title)}</h1>
-    <div class="hint">by Chengyao - Flexible Version</div>
+    <div class="hint">by Chengyao </div>
   </div>
   <div class="grid">
   {doc_cards}
   </div>
   <div class="footer">Tip：若图片过多，可在浏览器中使用搜索（⌘/Ctrl+F）按字段内容快速定位。</div>
+<script>
+// Helper function to escape HTML
+// 转义HTML的辅助函数
+function escapeHtml(text) {{
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}}
+
+// Handle form submissions
+document.addEventListener('DOMContentLoaded', function() {{
+    const forms = document.querySelectorAll('.rd-review-form');
+    
+    forms.forEach(function(form) {{
+        form.addEventListener('submit', async function(e) {{
+            e.preventDefault();
+            
+            const foodlogId = form.getAttribute('data-foodlog-id');
+            const rdName = form.querySelector('input[name="rd_name"]').value.trim();
+            const rdReview = form.querySelector('textarea[name="rd_review"]').value.trim();
+            const submitBtn = form.querySelector('.submit-btn');
+            const statusDiv = form.querySelector('.form-status');
+            
+            if (!rdName || !rdReview) {{
+                statusDiv.textContent = 'Please fill in RD name and review';
+                statusDiv.className = 'form-status error';
+                return;
+            }}
+            
+            // Disable submit button
+            submitBtn.disabled = true;
+            statusDiv.textContent = 'Submitting...';
+            statusDiv.className = 'form-status';
+            
+            try {{
+                const response = await fetch('/api/add-review', {{
+                    method: 'POST',
+                    headers: {{
+                        'Content-Type': 'application/json',
+                    }},
+                    body: JSON.stringify({{
+                        foodlog_id: foodlogId,
+                        rd_name: rdName,
+                        rd_review: rdReview
+                    }})
+                }});
+                
+                const result = await response.json();
+                
+                if (response.ok && result.success) {{
+                    statusDiv.textContent = 'Success! Review saved.';
+                    statusDiv.className = 'form-status success';
+                    
+                    // Display the review on the page
+                    // 在页面上显示review
+                    const reviewDisplay = document.getElementById('review-display-' + foodlogId);
+                    if (reviewDisplay) {{
+                        const escapedName = escapeHtml(rdName);
+                        const escapedReview = escapeHtml(rdReview);
+                        const timestamp = new Date().toLocaleString();
+                        reviewDisplay.innerHTML = '<div class="review-display-header">RD Review:</div><div class="review-display-content">' + escapedReview + '</div><div class="review-display-meta">By: ' + escapedName + ' | ' + timestamp + '</div>';
+                        reviewDisplay.classList.add('show');
+                    }}
+                    
+                    // Clear form
+                    form.querySelector('input[name="rd_name"]').value = '';
+                    form.querySelector('textarea[name="rd_review"]').value = '';
+                }} else {{
+                    statusDiv.textContent = result.error || 'Submission failed';
+                    statusDiv.className = 'form-status error';
+                }}
+            }} catch (error) {{
+                statusDiv.textContent = 'Submission failed: ' + error.message;
+                statusDiv.className = 'form-status error';
+            }} finally {{
+                submitBtn.disabled = false;
+            }}
+        }});
+    }});
+}});
+</script>
 </body>
 </html>
 """
@@ -697,9 +875,9 @@ def main():
     # Generate all cards / 生成所有卡片
     cards_html = []
     total = len(df)
-    for _, row in df.iterrows():
+    for idx, row in df.iterrows():
         try:
-            cards_html.append(build_card_html(row, images_dir, display_columns))
+            cards_html.append(build_card_html(row, images_dir, display_columns, row_idx=idx))
         except Exception as e:
             # Continue even if single record fails / 即使单条失败也不中断
             print(f"[WARN] Failed to render a record / 渲染某条记录失败：{e}", file=sys.stderr)
