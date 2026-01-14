@@ -1,4 +1,4 @@
-# show_foodlog_gallery_flexible.py
+# show_foodlog_gallery.py
 """
 Flexible FoodLog Gallery Generator
 Generate an HTML gallery from CSV food log data with dynamic column support.
@@ -18,7 +18,7 @@ Features / 功能特性:
 - Self-contained HTML output / 自包含HTML输出
 
 Usage / 使用方法:
-    python show_foodlog_gallery_flexible.py --csv your_data.csv --images ./images --out gallery.html --open
+    python show_foodlog_gallery.py --csv your_data.csv --images ./images --out gallery.html --open
 
 Required CSV columns / 必需的CSV列:
 - ImgName: Image filenames (can be multiple, separated by semicolon) / 图片文件名（可多个，用分号分隔）
@@ -661,7 +661,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Load images from specified directory based on CSV ImgName, display them, and convert JSON columns to natural language. Supports dynamic column detection. / 根据 CSV 的 ImgName 在指定 images 目录加载图片，展示并把 JSON 列转为自然语言。支持动态列检测。"
     )
-    parser.add_argument("csv_file", nargs='?', default="./foodlog_ai_analysis_img_name.csv", help="CSV file path (must contain ImgName column) / CSV 文件路径（必须包含ImgName列）")
+    parser.add_argument("csv_file", nargs='?', default="./foodlog_ai_analysis_v3.csv", help="CSV file path (must contain ImgName column) / CSV 文件路径（必须包含ImgName列）")
     parser.add_argument("--images", default="./images", help="Images directory (default: ./images) / 图片目录（默认 ./images）")
     parser.add_argument("--out", default="gallery_flexible.html", help="Output HTML filename (default: gallery_flexible.html) / 输出 HTML 文件名（默认 gallery_flexible.html）")
     parser.add_argument("--title", default="FoodLog Gallery - Flexible", help="HTML page title / HTML 页面标题")
