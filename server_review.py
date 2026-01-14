@@ -838,7 +838,7 @@ def generate_gallery_html() -> str:
             except Exception as e:
                 continue
         
-        return build_html("".join(cards_html), title="FoodLog Gallery - Live")
+        return build_html("".join(cards_html), title="FoodLog Gallery - RD Feedback")
     except Exception as e:
         return f"<html><body><h1>Error</h1><p>Failed to generate gallery: {str(e)}</p></body></html>"
 
@@ -970,7 +970,7 @@ def main():
     )
     parser.add_argument(
         '--csv', 
-        default='./foodlog_ai_analysis_img_name.csv',
+        default='./foodlog_ai_analysis_v3.csv',
         help='CSV file path'
     )
     parser.add_argument(
@@ -1015,6 +1015,17 @@ def main():
     
     print(f"[INFO] CSV file: {csv_path.resolve()}")
     print(f"[INFO] Images directory: {images_dir.resolve()}")
+    
+    # Generate and save gallery.html file
+    # 生成并保存 gallery.html 文件
+    try:
+        html_content = generate_gallery_html()
+        gallery_html_path = Path("gallery.html")
+        gallery_html_path.write_text(html_content, encoding="utf-8")
+        print(f"[INFO] Saved gallery.html: {gallery_html_path.resolve()}")
+    except Exception as e:
+        print(f"[WARN] Failed to save gallery.html: {e}", file=sys.stderr)
+    
     print(f"[INFO] Starting server on http://{args.host}:{args.port}")
     print(f"[INFO] Open http://{args.host}:{args.port}/gallery in your browser")
     print(f"[INFO] Gallery is dynamically generated from CSV (real-time updates)")
