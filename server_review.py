@@ -16,6 +16,7 @@ This server provides:
 import argparse
 import base64
 import json
+import re
 import sys
 import html as html_module
 from datetime import datetime
@@ -210,6 +211,10 @@ def format_field_value(value: Any, field_name: str) -> str:
         return value
     elif field_name.lower() in ['description']:
         return value
+    # Special handling for AI Identify Raw Data - don't use humanize_json to avoid adding indentation
+    # 特殊处理AI Identify Raw Data - 不使用humanize_json以避免添加缩进
+    elif field_name.lower() in ['aiidentifyrawdata', 'ai_identify_raw_data'] or ('identify' in field_name.lower() and 'raw' in field_name.lower()):
+        return value  # Return as-is without JSON formatting
     if looks_like_json(value):
         try:
             obj = json.loads(value)
@@ -243,8 +248,70 @@ def get_display_columns(df: pd.DataFrame) -> List[str]:
     return [col for col in df.columns if col not in system_columns]
 
 
+def format_field_name(field_name: str) -> str:
+    """Format field name from camelCase/PascalCase to readable format.
+    将字段名从驼峰命名转换为可读格式。
+    
+    Examples:
+        AiInsight -> AI Insight
+        AiDetectedFoods -> AI Detected Foods
+        MealTitle -> Meal Title
+    """
+    # Insert space before capital letters (except the first one)
+    # 在大写字母前插入空格（第一个除外）
+    formatted = re.sub(r'(?<!^)(?=[A-Z])', ' ', field_name)
+    # Handle "Ai" prefix specially
+    # 特殊处理"Ai"前缀
+    formatted = formatted.replace('Ai ', 'AI ', 1)
+    return formatted
+
+
+def _build_collapsible_raw_data(raw_data_info: dict, foodlog_id: str) -> str:
+    """Build collapsible HTML for AI Identify Raw Data field.
+    为AI Identify Raw Data字段构建可折叠的HTML。
+    """
+    if not raw_data_info:
+        return ""
+    
+    label = raw_data_info['label']
+    value = raw_data_info['value']
+    allow_html = raw_data_info.get('allow_html', False)
+    
+    # Escape HTML if needed
+    # 如果需要则转义HTML
+    if allow_html:
+        safe_value = value.replace("\n", "<br/>")
+    else:
+        safe_value = html_module.escape(value).replace("\n", "<br/>")
+    
+    unique_id = f"raw-data-{html_module.escape(foodlog_id)}"
+    
+    return f"""
+    <div class="ai-raw-data-container">
+        <button type="button" class="ai-raw-data-toggle" onclick="toggleRawData('{unique_id}')">
+            <span class="toggle-icon" id="toggle-icon-{unique_id}">▼</span>
+            {html_module.escape(label)}
+        </button>
+        <div class="ai-raw-data-content expanded" id="{unique_id}">
+            <div class="ai-raw-data-scroll">
+                {safe_value}
+            </div>
+        </div>
+    </div>
+    """
+
+
 def build_card_html(row, images_dir: Path, display_columns: List[str], row_idx: Any = None) -> str:
     """Build HTML card for a single food log entry with dynamic columns."""
+    # Get foodlog_id first (needed for various parts of the card)
+    # 首先获取foodlog_id（卡片多个部分需要）
+    foodlog_id = ""
+    if "FoodLogId" in row.index:
+        foodlog_id_val = row["FoodLogId"]
+        foodlog_id = str(foodlog_id_val) if pd.notna(foodlog_id_val) else ""
+    if not foodlog_id and row_idx is not None:
+        foodlog_id = str(row_idx)
+    
     raw_imgnames = str(row.get("ImgName", "") or "").strip()
     img_names: Iterable[str] = [x.strip() for x in raw_imgnames.split(";") if x.strip()] if raw_imgnames else []
     
@@ -269,22 +336,69 @@ def build_card_html(row, images_dir: Path, display_columns: List[str], row_idx: 
             safe = text.replace("\n", "<br/>")
         return f'<div class="field"><div class="label">{html_module.escape(label)}</div><div class="value">{safe}</div></div>'
     
-    field_html = []
+    # Separate AI fields from other fields
+    # 分离AI字段和其他字段
+    ai_fields = []
+    ai_additional_fields = []  # Fields to add at the end: FoodLogLabels, MicroAction, ActionFamily, BestAnchor
+    ai_raw_data_field = None
+    other_fields = []
+    
+    # Fields that should be in AI Generated Content (at the end)
+    # 应该放在AI Generated Content中的字段（靠后位置）
+    ai_content_fields = {'FoodLogLabels', 'MicroAction', 'ActionFamily', 'BestAnchor'}
+    
     for col in display_columns:
         if col == "ImgName":
             continue
         value = row[col] if col in row.index else ""
         formatted_value = format_field_value(value, col)
-        allow_html = col.lower() in ['ingredients']
-        if formatted_value:
-            field_html.append(para(col, formatted_value, escape_html=not allow_html))
+        if not formatted_value:
+            continue
+        
+        # Check if field starts with "Ai" (case-insensitive)
+        # 检查字段是否以"Ai"开头（不区分大小写）
+        if col.startswith("Ai") or col.startswith("ai"):
+            formatted_label = format_field_name(col)
+            allow_html = col.lower() in ['ingredients']
+            
+            # Special handling for AI Identify Raw Data - make it collapsible
+            # 特殊处理AI Identify Raw Data - 使其可折叠
+            if col.lower() in ['aiidentifyrawdata', 'ai_identify_raw_data'] or 'identify' in col.lower() and 'raw' in col.lower():
+                ai_raw_data_field = {
+                    'label': formatted_label,
+                    'value': formatted_value,
+                    'allow_html': allow_html,
+                    'foodlog_id': foodlog_id
+                }
+            else:
+                ai_fields.append(para(formatted_label, formatted_value, escape_html=not allow_html))
+        elif col in ai_content_fields:
+            # Add these fields to AI content box (at the end)
+            # 将这些字段添加到AI内容框（靠后位置）
+            allow_html = col.lower() in ['ingredients']
+            ai_additional_fields.append(para(col, formatted_value, escape_html=not allow_html))
+        else:
+            allow_html = col.lower() in ['ingredients']
+            other_fields.append(para(col, formatted_value, escape_html=not allow_html))
     
-    foodlog_id = ""
-    if "FoodLogId" in row.index:
-        foodlog_id_val = row["FoodLogId"]
-        foodlog_id = str(foodlog_id_val) if pd.notna(foodlog_id_val) else ""
-    if not foodlog_id and row_idx is not None:
-        foodlog_id = str(row_idx)
+    # Build AI content box if there are AI fields
+    # 如果有AI字段，构建AI内容框
+    ai_content_html = ""
+    if ai_fields or ai_additional_fields or ai_raw_data_field:
+        ai_content_html = f"""
+        <div class="ai-content-box">
+            <div class="ai-content-header">AI Generated Content</div>
+            <div class="ai-content-body">
+                {''.join(ai_fields)}
+                {''.join(ai_additional_fields)}
+                {_build_collapsible_raw_data(ai_raw_data_field, foodlog_id) if ai_raw_data_field else ''}
+            </div>
+        </div>
+        """
+    
+    # Combine other fields
+    # 组合其他字段
+    field_html = other_fields
     
     # Check if there are existing feedbacks to display
     existing_feedbacks_html = ""
@@ -360,6 +474,7 @@ def build_card_html(row, images_dir: Path, display_columns: List[str], row_idx: 
         <div class="meta">
             {''.join(field_html)}
         </div>
+        {ai_content_html}
         {review_form}
     </div>
     """
@@ -435,6 +550,97 @@ h1 {{
 }}
 .meta {{
   display: flex; flex-direction: column; gap: 6px;
+}}
+.ai-content-box {{
+  margin-top: 12px;
+  padding: 14px;
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+  border-radius: 8px;
+  border-left: 4px solid var(--accent);
+}}
+.ai-content-header {{
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}}
+.ai-content-body {{
+  display: flex; flex-direction: column; gap: 8px;
+}}
+.ai-raw-data-container {{
+  margin-top: 4px;
+}}
+.ai-raw-data-toggle {{
+  width: 100%;
+  padding: 8px 10px;
+  background: #e0f2fe;
+  border: 1px solid #bae6fd;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 0.2s;
+}}
+.ai-raw-data-toggle:hover {{
+  background: #bae6fd;
+}}
+.toggle-icon {{
+  font-size: 10px;
+  transition: transform 0.2s;
+  display: inline-block;
+}}
+.toggle-icon.collapsed {{
+  transform: rotate(-90deg);
+}}
+.toggle-icon:not(.collapsed) {{
+  transform: rotate(0deg);
+}}
+.ai-raw-data-content {{
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.3s ease-out;
+  margin-top: 0;
+}}
+.ai-raw-data-content.expanded {{
+  max-height: 400px;
+  margin-top: 8px;
+}}
+.ai-raw-data-scroll {{
+  margin-top: 0;
+  padding: 10px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text);
+  max-height: 400px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}}
+.ai-raw-data-scroll::-webkit-scrollbar {{
+  width: 6px;
+}}
+.ai-raw-data-scroll::-webkit-scrollbar-track {{
+  background: #f1f5f9;
+  border-radius: 3px;
+}}
+.ai-raw-data-scroll::-webkit-scrollbar-thumb {{
+  background: #cbd5e1;
+  border-radius: 3px;
+}}
+.ai-raw-data-scroll::-webkit-scrollbar-thumb:hover {{
+  background: #94a3b8;
 }}
 .field .label {{
   font-size: 12px;
@@ -533,6 +739,18 @@ function escapeHtml(text) {{
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}}
+
+function toggleRawData(id) {{
+    const content = document.getElementById(id);
+    const icon = document.getElementById('toggle-icon-' + id);
+    if (content.classList.contains('expanded')) {{
+        content.classList.remove('expanded');
+        icon.classList.add('collapsed');
+    }} else {{
+        content.classList.add('expanded');
+        icon.classList.remove('collapsed');
+    }}
 }}
 
 document.addEventListener('DOMContentLoaded', function() {{
