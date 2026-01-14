@@ -558,6 +558,11 @@ h1 {{
   border: 1px solid #bae6fd;
   border-radius: 8px;
   border-left: 4px solid var(--accent);
+  overflow: hidden;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  max-width: 100%;
+  box-sizing: border-box;
 }}
 .ai-content-header {{
   font-size: 13px;
@@ -566,9 +571,15 @@ h1 {{
   margin-bottom: 10px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
 }}
 .ai-content-body {{
   display: flex; flex-direction: column; gap: 8px;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  max-width: 100%;
+  box-sizing: border-box;
 }}
 .ai-raw-data-container {{
   margin-top: 4px;
@@ -642,14 +653,26 @@ h1 {{
 .ai-raw-data-scroll::-webkit-scrollbar-thumb:hover {{
   background: #94a3b8;
 }}
+.field {{
+  max-width: 100%;
+  box-sizing: border-box;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}}
 .field .label {{
   font-size: 12px;
   color: var(--muted);
   margin-bottom: 2px;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
 }}
 .field .value {{
   font-size: 14px; line-height: 1.5;
   white-space: normal;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  max-width: 100%;
+  box-sizing: border-box;
 }}
 .footer {{
   margin-top: 18px; color: var(--muted); font-size: 12px;
