@@ -274,12 +274,91 @@ let tokenClient;
 let accessToken = null;
 let gapiInitialized = false;
 
+// Token storage keys
+// Token 存储键
+const TOKEN_STORAGE_KEY = 'google_sheets_access_token';
+const TOKEN_EXPIRY_KEY = 'google_sheets_token_expiry';
+
+// Load saved token from localStorage
+// 从 localStorage 加载保存的 token
+// Note: localStorage works on GitHub Pages (same origin: https://chengyao-ihealth.github.io)
+// 注意：localStorage 在 GitHub Pages 上可以正常工作（同源：https://chengyao-ihealth.github.io）
+function loadSavedToken() {{
+    try {{
+        // Check if localStorage is available (should be available on GitHub Pages)
+        // 检查 localStorage 是否可用（在 GitHub Pages 上应该可用）
+        if (typeof Storage === 'undefined' || !window.localStorage) {{
+            console.warn('[WARN] localStorage is not available');
+            return false;
+        }}
+        
+        const savedToken = localStorage.getItem(TOKEN_STORAGE_KEY);
+        const savedExpiry = localStorage.getItem(TOKEN_EXPIRY_KEY);
+        
+        if (savedToken && savedExpiry) {{
+            const expiryTime = parseInt(savedExpiry, 10);
+            const now = Date.now();
+            
+            // Check if token is still valid (with 5 minute buffer)
+            // 检查 token 是否仍然有效（保留 5 分钟缓冲）
+            if (now < expiryTime - 5 * 60 * 1000) {{
+                accessToken = savedToken;
+                console.log('[DEBUG] Loaded saved access token from localStorage');
+                return true;
+            }} else {{
+                console.log('[DEBUG] Saved token expired, clearing...');
+                localStorage.removeItem(TOKEN_STORAGE_KEY);
+                localStorage.removeItem(TOKEN_EXPIRY_KEY);
+            }}
+        }}
+    }} catch (e) {{
+        // Handle cases where localStorage might be blocked (e.g., private browsing)
+        // 处理 localStorage 可能被阻止的情况（例如，隐私浏览模式）
+        console.warn('[WARN] Failed to load saved token:', e);
+        // localStorage might be disabled, continue without saved token
+        // localStorage 可能被禁用，继续不使用保存的 token
+    }}
+    return false;
+}}
+
+// Save token to localStorage
+// 保存 token 到 localStorage
+// Works on GitHub Pages: localStorage is domain-specific (https://chengyao-ihealth.github.io)
+// 在 GitHub Pages 上可用：localStorage 是域名特定的（https://chengyao-ihealth.github.io）
+function saveToken(token, expiresIn) {{
+    try {{
+        // Check if localStorage is available
+        // 检查 localStorage 是否可用
+        if (typeof Storage === 'undefined' || !window.localStorage) {{
+            console.warn('[WARN] localStorage is not available, token will not be saved');
+            return;
+        }}
+        
+        localStorage.setItem(TOKEN_STORAGE_KEY, token);
+        // Calculate expiry time (expiresIn is in seconds)
+        // 计算过期时间（expiresIn 以秒为单位）
+        const expiryTime = Date.now() + (expiresIn * 1000);
+        localStorage.setItem(TOKEN_EXPIRY_KEY, expiryTime.toString());
+        console.log('[DEBUG] Saved access token to localStorage (works on GitHub Pages)');
+    }} catch (e) {{
+        // Handle cases where localStorage might be blocked (e.g., private browsing, quota exceeded)
+        // 处理 localStorage 可能被阻止的情况（例如，隐私浏览模式、配额超出）
+        console.warn('[WARN] Failed to save token to localStorage:', e);
+        // Continue without saving - user will need to re-authorize next time
+        // 继续但不保存 - 用户下次需要重新授权
+    }}
+}}
+
 // Initialize Google API
 // 初始化 Google API
 function initGoogleAPI() {{
     if (gapiInitialized) return;
     
     console.log('[DEBUG] Starting Google API initialization...');
+    
+    // Try to load saved token first
+    // 首先尝试加载保存的 token
+    loadSavedToken();
     
     // Initialize Google Identity Services first (doesn't require API init)
     // 首先初始化 Google Identity Services（不需要 API 初始化）
@@ -293,10 +372,15 @@ function initGoogleAPI() {{
                     return;
                 }}
                 accessToken = response.access_token;
+                // Save token to localStorage
+                // 保存 token 到 localStorage
+                if (response.expires_in) {{
+                    saveToken(accessToken, response.expires_in);
+                }}
                 if (gapiInitialized) {{
                     gapi.client.setToken({{ access_token: accessToken }});
                 }}
-                console.log('[DEBUG] Access token obtained');
+                console.log('[DEBUG] Access token obtained and saved');
             }},
         }});
         console.log('[DEBUG] Google Identity Services initialized');
@@ -482,8 +566,12 @@ async function addFeedbackViaSheetsAPI(foodlogId, rdName, rdFeedback) {{
         }});
     }}
     
-    // Check if we have access token
-    // 检查是否有访问令牌
+    // Check if we have access token (try loading from localStorage first)
+    // 检查是否有访问令牌（首先尝试从 localStorage 加载）
+    if (!accessToken) {{
+        loadSavedToken();
+    }}
+    
     if (!accessToken) {{
         console.log('[DEBUG] No access token, requesting authorization...');
         // Request token if not available
@@ -502,14 +590,27 @@ async function addFeedbackViaSheetsAPI(foodlogId, rdName, rdFeedback) {{
                 }}
                 console.log('[DEBUG] Access token obtained');
                 accessToken = response.access_token;
+                // Save token to localStorage
+                // 保存 token 到 localStorage
+                if (response.expires_in) {{
+                    saveToken(accessToken, response.expires_in);
+                }}
                 gapi.client.setToken({{ access_token: accessToken }});
                 addFeedbackViaSheetsAPI(foodlogId, rdName, rdFeedback)
                     .then(resolve)
                     .catch(reject);
             }};
             console.log('[DEBUG] Requesting access token...');
-            tokenClient.requestAccessToken({{ prompt: 'consent' }});
+            // Use 'select_account' instead of 'consent' to avoid re-prompting if already authorized
+            // 使用 'select_account' 而不是 'consent'，避免在已授权时重新提示
+            tokenClient.requestAccessToken({{ prompt: 'select_account' }});
         }});
+    }} else {{
+        // Token exists, make sure it's set for gapi
+        // Token 存在，确保为 gapi 设置
+        if (gapiInitialized) {{
+            gapi.client.setToken({{ access_token: accessToken }});
+        }}
     }}
     
     try {{
@@ -753,10 +854,18 @@ def main():
     print(f"  - 本地开发：在授权的 JavaScript 源中添加 http://localhost 和 http://127.0.0.1")
     print(f"  - For GitHub Pages: Add https://chengyao-ihealth.github.io to authorized JavaScript origins")
     print(f"  - GitHub Pages：在授权的 JavaScript 源中添加 https://chengyao-ihealth.github.io")
+    print(f"\n[INFO] Token Storage:")
+    print(f"[INFO] Token 存储：")
+    print(f"  - Tokens are saved in browser localStorage (works on GitHub Pages)")
+    print(f"  - Token 保存在浏览器 localStorage 中（在 GitHub Pages 上可用）")
+    print(f"  - Users only need to authorize once per browser/device")
+    print(f"  - 用户每个浏览器/设备只需授权一次")
+    print(f"  - Token persists across page refreshes and browser sessions")
+    print(f"  - Token 在页面刷新和浏览器会话之间保持有效")
     print(f"\n[INFO] You can now:")
     print(f"  - Open via HTTP server: python3 -m http.server 8000 (then visit http://localhost:8000/{output_path.name})")
     print(f"  - Deploy to GitHub Pages: push to repository and access via https://chengyao-ihealth.github.io/ai-tools/{output_path.name}")
-    print(f"\n[INFO] Users will be prompted to authorize Google Sheets access when submitting feedback")
+    print(f"\n[INFO] Users will be prompted to authorize Google Sheets access on first use only")
 
 
 if __name__ == '__main__':
