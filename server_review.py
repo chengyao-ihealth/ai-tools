@@ -634,6 +634,16 @@ h1 {{
   grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
   gap: 16px;
 }}
+@media (max-width: 768px) {{
+  .grid {{
+    grid-template-columns: 1fr;
+  }}
+}}
+@media (min-width: 769px) and (max-width: 1024px) {{
+  .grid {{
+    grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  }}
+}}
 .card {{
   background: var(--card);
   border: 1px solid var(--border);
