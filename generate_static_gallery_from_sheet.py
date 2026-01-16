@@ -699,6 +699,176 @@ async function addFeedbackViaSheetsAPI(foodlogId, rdName, rdFeedback) {{
     }}
 }}
 
+// Function to refresh feedbacks from Google Sheet
+// 从 Google Sheet 刷新反馈
+async function refreshFeedbacksFromSheet() {{
+    console.log('[DEBUG] Refreshing feedbacks from Google Sheet...');
+    
+    if (!gapiInitialized) {{
+        console.log('[DEBUG] Waiting for Google API initialization...');
+        await new Promise((resolve) => {{
+            const checkInit = setInterval(() => {{
+                if (gapiInitialized) {{
+                    clearInterval(checkInit);
+                    resolve();
+                }}
+            }}, 100);
+        }});
+    }}
+    
+    // Check if we have access token
+    // 检查是否有访问令牌
+    if (!accessToken) {{
+        loadSavedToken();
+    }}
+    
+    if (!accessToken) {{
+        console.log('[DEBUG] No access token available, skipping refresh');
+        return;
+    }}
+    
+    try {{
+        // Set token for API calls
+        // 为 API 调用设置 token
+        if (gapiInitialized) {{
+            gapi.client.setToken({{ access_token: accessToken }});
+        }}
+        
+        // Read all data from sheet
+        // 从 sheet 读取所有数据
+        const response = await gapi.client.sheets.spreadsheets.values.get({{
+            spreadsheetId: GOOGLE_SHEET_ID,
+            range: `${{SHEET_NAME}}!A:ZZ`,
+        }});
+        
+        const values = response.result.values || [];
+        if (values.length === 0) {{
+            console.log('[DEBUG] Sheet is empty');
+            return;
+        }}
+        
+        // Find FoodLogId and RD Feedback columns
+        // 找到 FoodLogId 和 RD Feedback 列
+        const headers = values[0];
+        const foodlogIdCol = headers.indexOf('FoodLogId');
+        const rdFeedbackCol = headers.indexOf('RD Feedback');
+        
+        if (foodlogIdCol === -1) {{
+            console.log('[DEBUG] FoodLogId column not found');
+            return;
+        }}
+        
+        if (rdFeedbackCol === -1) {{
+            console.log('[DEBUG] RD Feedback column not found, no feedbacks to refresh');
+            return;
+        }}
+        
+        // Update feedbacks for each card
+        // 更新每个卡片的反馈
+        for (let i = 1; i < values.length; i++) {{
+            const row = values[i];
+            if (row.length <= foodlogIdCol) continue;
+            
+            const foodlogId = row[foodlogIdCol];
+            if (!foodlogId) continue;
+            
+            const reviewDisplay = document.getElementById('review-display-' + foodlogId);
+            if (!reviewDisplay) continue;
+            
+            // Get current feedback value
+            // 获取当前反馈值
+            let feedbackValue = '';
+            if (row.length > rdFeedbackCol) {{
+                feedbackValue = row[rdFeedbackCol] || '';
+            }}
+            
+            // Parse and display feedbacks
+            // 解析并显示反馈
+            let feedbackList = [];
+            if (feedbackValue && feedbackValue.trim()) {{
+                try {{
+                    const feedbackStr = feedbackValue.trim();
+                    if (feedbackStr.startsWith('[')) {{
+                        feedbackList = JSON.parse(feedbackStr);
+                    }} else if (feedbackStr.startsWith('{{')) {{
+                        feedbackList = [JSON.parse(feedbackStr)];
+                    }}
+                }} catch (e) {{
+                    console.warn('[WARN] Failed to parse feedback for', foodlogId, ':', e);
+                }}
+            }}
+            
+            // Clear existing feedbacks and add all from sheet
+            // 清除现有反馈并添加 sheet 中的所有反馈
+            reviewDisplay.innerHTML = '';
+            
+            if (feedbackList.length > 0) {{
+                feedbackList.forEach(feedback => {{
+                    if (typeof feedback === 'object' && feedback !== null) {{
+                        const rdName = feedback.rd_name || 'Unknown';
+                        const feedbackText = feedback.feedback || '';
+                        const feedbackedAt = feedback.feedbackedAt || '';
+                        
+                        // Format timestamp
+                        // 格式化时间戳
+                        let timestamp = feedbackedAt;
+                        try {{
+                            const dt = new Date(feedbackedAt);
+                            if (!isNaN(dt.getTime())) {{
+                                timestamp = dt.getFullYear() + '-' + 
+                                    String(dt.getMonth() + 1).padStart(2, '0') + '-' + 
+                                    String(dt.getDate()).padStart(2, '0') + ' ' + 
+                                    String(dt.getHours()).padStart(2, '0') + ':' + 
+                                    String(dt.getMinutes()).padStart(2, '0') + ':' + 
+                                    String(dt.getSeconds()).padStart(2, '0');
+                            }}
+                        }} catch (e) {{
+                            // Keep original timestamp
+                        }}
+                        
+                        // Escape HTML
+                        // 转义 HTML
+                        function escapeHtml(text) {{
+                            const div = document.createElement('div');
+                            div.textContent = text;
+                            return div.innerHTML;
+                        }}
+                        
+                        const escapedName = escapeHtml(rdName);
+                        const escapedFeedback = escapeHtml(feedbackText).replace(/\\n/g, '<br/>');
+                        
+                        // Create feedback item
+                        // 创建反馈项
+                        const feedbackItem = document.createElement('div');
+                        feedbackItem.className = 'review-display-item';
+                        feedbackItem.innerHTML = 
+                            '<div class="review-display-header">RD Feedback:</div>' +
+                            '<div class="review-display-content">' + escapedFeedback + '</div>' +
+                            '<div class="review-display-meta">By: ' + escapedName + ' | ' + timestamp + '</div>';
+                        
+                        reviewDisplay.appendChild(feedbackItem);
+                    }}
+                }});
+                
+                // Make sure display area is visible
+                // 确保显示区域可见
+                reviewDisplay.style.display = 'block';
+            }} else {{
+                // Hide if no feedbacks
+                // 如果没有反馈则隐藏
+                reviewDisplay.style.display = 'none';
+            }}
+        }}
+        
+        console.log('[DEBUG] Feedbacks refreshed from Google Sheet');
+        
+    }} catch (error) {{
+        console.error('[ERROR] Failed to refresh feedbacks:', error);
+        // Don't show error to user, just log it
+        // 不向用户显示错误，只记录
+    }}
+}}
+
 // Initialize on page load
 // 页面加载时初始化
 document.addEventListener('DOMContentLoaded', function() {{
@@ -727,6 +897,12 @@ document.addEventListener('DOMContentLoaded', function() {{
         }} else {{
             console.log('[DEBUG] Google Identity Services loaded');
         }}
+        
+        // Try to refresh feedbacks after API is loaded (if we have a token)
+        // 在 API 加载后尝试刷新反馈（如果我们有 token）
+        setTimeout(() => {{
+            refreshFeedbacksFromSheet();
+        }}, 2000);
     }}, 1000);
 }});
 </script>
