@@ -951,6 +951,28 @@ function hideLoginOverlay() {{
     }}
 }}
 
+// Toggle raw data display
+// 切换原始数据显示
+function toggleRawData(id) {{
+    const content = document.getElementById(id);
+    if (!content) {{
+        console.error('[ERROR] Content element not found:', id);
+        return;
+    }}
+    const icon = document.getElementById('toggle-icon-' + id);
+    if (!icon) {{
+        console.error('[ERROR] Icon element not found:', 'toggle-icon-' + id);
+        return;
+    }}
+    if (content.classList.contains('expanded')) {{
+        content.classList.remove('expanded');
+        icon.classList.add('collapsed');
+    }} else {{
+        content.classList.add('expanded');
+        icon.classList.remove('collapsed');
+    }}
+}}
+
 // Get saved user name from localStorage
 // 从 localStorage 获取保存的用户名
 function getSavedUserName() {{

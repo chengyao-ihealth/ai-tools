@@ -289,10 +289,10 @@ def _build_collapsible_raw_data(raw_data_info: dict, foodlog_id: str) -> str:
     return f"""
     <div class="ai-raw-data-container">
         <button type="button" class="ai-raw-data-toggle" onclick="toggleRawData('{unique_id}')">
-            <span class="toggle-icon" id="toggle-icon-{unique_id}">▼</span>
+            <span class="toggle-icon collapsed" id="toggle-icon-{unique_id}">▼</span>
             {html_module.escape(label)}
         </button>
-        <div class="ai-raw-data-content expanded" id="{unique_id}">
+        <div class="ai-raw-data-content" id="{unique_id}">
             <div class="ai-raw-data-scroll">
                 {safe_value}
             </div>
@@ -338,8 +338,6 @@ def build_card_html(row, images_dir: Path, display_columns: List[str], row_idx: 
     
     # Separate AI fields from other fields
     # 分离AI字段和其他字段
-    ai_fields = []
-    ai_additional_fields = []  # Fields to add at the end: FoodLogLabels, MicroAction, ActionFamily, BestAnchor
     ai_raw_data_field = None
     other_fields = []
     
@@ -371,30 +369,22 @@ def build_card_html(row, images_dir: Path, display_columns: List[str], row_idx: 
                     'foodlog_id': foodlog_id
                 }
             else:
-                ai_fields.append(para(formatted_label, formatted_value, escape_html=not allow_html))
+                # Add AI fields directly to other_fields (no blue box)
+                # 直接将AI字段添加到other_fields（不使用蓝框）
+                other_fields.append(para(formatted_label, formatted_value, escape_html=not allow_html))
         elif col in ai_content_fields:
-            # Add these fields to AI content box (at the end)
-            # 将这些字段添加到AI内容框（靠后位置）
+            # Add these fields directly to other_fields (no blue box)
+            # 直接将字段添加到other_fields（不使用蓝框）
             allow_html = col.lower() in ['ingredients']
-            ai_additional_fields.append(para(col, formatted_value, escape_html=not allow_html))
+            other_fields.append(para(col, formatted_value, escape_html=not allow_html))
         else:
             allow_html = col.lower() in ['ingredients']
             other_fields.append(para(col, formatted_value, escape_html=not allow_html))
     
-    # Build AI content box if there are AI fields
-    # 如果有AI字段，构建AI内容框
-    ai_content_html = ""
-    if ai_fields or ai_additional_fields or ai_raw_data_field:
-        ai_content_html = f"""
-        <div class="ai-content-box">
-            <div class="ai-content-header">AI Generated Content</div>
-            <div class="ai-content-body">
-                {''.join(ai_fields)}
-                {''.join(ai_additional_fields)}
-                {_build_collapsible_raw_data(ai_raw_data_field, foodlog_id) if ai_raw_data_field else ''}
-            </div>
-        </div>
-        """
+    # Add AI Identify Raw Data as collapsible field (if exists)
+    # 添加AI Identify Raw Data作为可折叠字段（如果存在）
+    if ai_raw_data_field:
+        other_fields.append(_build_collapsible_raw_data(ai_raw_data_field, foodlog_id))
     
     # Combine other fields
     # 组合其他字段
@@ -474,7 +464,6 @@ def build_card_html(row, images_dir: Path, display_columns: List[str], row_idx: 
         <div class="meta">
             {''.join(field_html)}
         </div>
-        {ai_content_html}
         {review_form}
     </div>
     """
@@ -619,10 +608,12 @@ h1 {{
   overflow: hidden;
   transition: max-height 0.3s ease-out;
   margin-top: 0;
+  opacity: 0;
 }}
 .ai-raw-data-content.expanded {{
-  max-height: 400px;
+  max-height: 2000px;
   margin-top: 8px;
+  opacity: 1;
 }}
 .ai-raw-data-scroll {{
   margin-top: 0;
@@ -766,7 +757,15 @@ function escapeHtml(text) {{
 
 function toggleRawData(id) {{
     const content = document.getElementById(id);
+    if (!content) {{
+        console.error('[ERROR] Content element not found:', id);
+        return;
+    }}
     const icon = document.getElementById('toggle-icon-' + id);
+    if (!icon) {{
+        console.error('[ERROR] Icon element not found:', 'toggle-icon-' + id);
+        return;
+    }}
     if (content.classList.contains('expanded')) {{
         content.classList.remove('expanded');
         icon.classList.add('collapsed');
