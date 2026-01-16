@@ -286,11 +286,11 @@ def generate_static_gallery_html(spreadsheet_id: str, sheet_name: str = None, im
         # 构建带有动态头部的 HTML（将由 JavaScript 更新）
         html_content = build_html("".join(cards_html), title="FoodLog Gallery - RD Feedback")
         
-        # Replace the static "by Chengyao" with a placeholder that will be updated by JavaScript
-        # 将静态的 "by Chengyao" 替换为将由 JavaScript 更新的占位符
+        # Replace the static hint with a placeholder that will be updated by JavaScript
+        # 将静态提示替换为将由 JavaScript 更新的占位符
         html_content = html_content.replace(
             '<div class="hint">by Chengyao </div>',
-            '<div class="hint" id="user-name-display">by Chengyao</div>'
+            '<div class="hint" id="user-name-display"></div>'
         )
         
         # Get client_id if not provided
@@ -931,7 +931,7 @@ async function refreshFeedbacksFromSheet() {{
 function updateHeaderWithUserName(userName) {{
     const hintDiv = document.getElementById('user-name-display') || document.querySelector('.header .hint');
     if (hintDiv && userName) {{
-        hintDiv.textContent = 'by ' + userName;
+        hintDiv.textContent = userName;
     }}
 }}
 

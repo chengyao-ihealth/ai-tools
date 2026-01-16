@@ -505,7 +505,7 @@ h1 {{
 }}
 .grid {{
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
   gap: 16px;
 }}
 .card {{
@@ -747,7 +747,7 @@ h1 {{
   <div class="grid">
   {doc_cards}
   </div>
-  <div class="footer">Tip：若图片过多，可在浏览器中使用搜索（⌘/Ctrl+F）按字段内容快速定位。</div>
+  <div class="footer">Tip: You can use browser search (⌘/Ctrl+F) to quickly locate content by field if there are many images.</div>
 <script>
 function escapeHtml(text) {{
     const div = document.createElement('div');
