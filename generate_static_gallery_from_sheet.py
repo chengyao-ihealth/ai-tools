@@ -771,6 +771,103 @@ document.addEventListener('DOMContentLoaded', function() {{
             "statusDiv.textContent = 'Submission failed: ' + (error.message || 'Unknown error');\n                console.error('[ERROR] Full error object:', error);"
         )
         
+        # Add function to append feedback to display area (instead of reloading page)
+        # 添加函数以将反馈追加到显示区域（而不是重新加载页面）
+        add_feedback_display_function = """
+// Function to add feedback item to the display area
+// 将反馈项添加到显示区域的函数
+function addFeedbackToDisplay(foodlogId, rdName, rdFeedback) {
+    const reviewDisplay = document.getElementById('review-display-' + foodlogId);
+    if (!reviewDisplay) {
+        console.error('[ERROR] Review display element not found for foodlogId:', foodlogId);
+        return;
+    }
+    
+    // Format timestamp
+    // 格式化时间戳
+    const now = new Date();
+    const timestamp = now.getFullYear() + '-' + 
+        String(now.getMonth() + 1).padStart(2, '0') + '-' + 
+        String(now.getDate()).padStart(2, '0') + ' ' + 
+        String(now.getHours()).padStart(2, '0') + ':' + 
+        String(now.getMinutes()).padStart(2, '0') + ':' + 
+        String(now.getSeconds()).padStart(2, '0');
+    
+    // Escape HTML to prevent XSS
+    // 转义 HTML 以防止 XSS
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+    
+    const escapedName = escapeHtml(rdName);
+    const escapedFeedback = escapeHtml(rdFeedback).replace(/\\n/g, '<br/>');
+    
+    // Create new feedback item
+    // 创建新的反馈项
+    const feedbackItem = document.createElement('div');
+    feedbackItem.className = 'review-display-item';
+    feedbackItem.innerHTML = 
+        '<div class="review-display-header">RD Feedback:</div>' +
+        '<div class="review-display-content">' + escapedFeedback + '</div>' +
+        '<div class="review-display-meta">By: ' + escapedName + ' | ' + timestamp + '</div>';
+    
+    // Append to display area
+    // 追加到显示区域
+    reviewDisplay.appendChild(feedbackItem);
+    
+    // Make sure display area is visible
+    // 确保显示区域可见
+    reviewDisplay.style.display = 'block';
+    
+    console.log('[DEBUG] Feedback added to display area');
+}
+"""
+        
+        # Insert the function before the form submission handler
+        # 在表单提交处理程序之前插入函数
+        html_content = html_content.replace(
+            'document.addEventListener(\'DOMContentLoaded\', function() {',
+            add_feedback_display_function + '\n\ndocument.addEventListener(\'DOMContentLoaded\', function() {'
+        )
+        
+        # Replace window.location.reload() with immediate display update
+        # 用立即显示更新替换 window.location.reload()
+        # Find and replace the reload logic in the success handler
+        # 在成功处理程序中查找并替换重新加载逻辑
+        reload_pattern = (
+            r"(statusDiv\.textContent = 'Success! Feedback saved\.';"
+            r"\s+statusDiv\.className = 'form-status success';"
+            r"\s+// Reload the page to show all feedbacks.*?"
+            r"setTimeout\(function\(\) \{\s+window\.location\.reload\(\);\s+\}, 500\);)"
+        )
+        
+        new_success_code = """statusDiv.textContent = 'Success! Feedback saved.';
+                    statusDiv.className = 'form-status success';
+                    
+                    // Add feedback to display immediately without reloading
+                    // 立即将反馈添加到显示区域，无需重新加载
+                    addFeedbackToDisplay(foodlogId, rdName, rdFeedback);
+                    
+                    // Clear form
+                    // 清空表单
+                    form.querySelector('input[name="rd_name"]').value = '';
+                    form.querySelector('textarea[name="rd_feedback"]').value = '';"""
+        
+        html_content = re.sub(reload_pattern, new_success_code, html_content, flags=re.DOTALL)
+        
+        # Also handle the case where the pattern might be slightly different
+        # 同时处理模式可能略有不同的情况
+        html_content = html_content.replace(
+            "// Reload the page to show all feedbacks (including the new one)",
+            "// Add feedback to display immediately without reloading"
+        )
+        html_content = html_content.replace(
+            "setTimeout(function() {\n                        window.location.reload();\n                    }, 500);",
+            "addFeedbackToDisplay(foodlogId, rdName, rdFeedback);\n                    form.querySelector('input[name=\"rd_name\"]').value = '';\n                    form.querySelector('textarea[name=\"rd_feedback\"]').value = '';"
+        )
+        
         # Insert API config before the existing script
         # 在现有脚本之前插入 API 配置
         html_content = html_content.replace(
