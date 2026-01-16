@@ -892,7 +892,50 @@ async function refreshFeedbacksFromSheet() {{
                         }}
                         
                         const escapedName = escapeHtml(rdName);
-                        const escapedFeedback = escapeHtml(feedbackText).replace(/\\n/g, '<br/>');
+                        
+                        // Check if feedback is questionnaire format (JSON)
+                        // 检查反馈是否为问卷格式（JSON）
+                        let escapedFeedback = '';
+                        try {{
+                            const questionnaireData = typeof feedbackText === 'string' ? JSON.parse(feedbackText) : feedbackText;
+                            if (typeof questionnaireData === 'object' && questionnaireData !== null && 'q1_clinically_appropriate' in questionnaireData) {{
+                                // Format questionnaire data
+                                // 格式化问卷数据
+                                const questions = [
+                                    {{text: 'Clinically appropriate and safe', value: questionnaireData.q1_clinically_appropriate || ''}},
+                                    {{text: 'Main message focuses on most important thing', value: questionnaireData.q2_main_message || ''}},
+                                    {{text: 'Reasonably reflects what\\'s on plate/log', value: questionnaireData.q3_reflects_plate || ''}},
+                                    {{text: 'Suggested action makes sense', value: questionnaireData.q4_action_makes_sense || ''}},
+                                    {{text: 'Tone is supportive and patient-friendly', value: questionnaireData.q5_tone || ''}},
+                                    {{text: 'Comfortable sending to patients', value: questionnaireData.q6_comfortable_sending || ''}}
+                                ];
+                                
+                                escapedFeedback = '<div class="questionnaire-results">';
+                                questions.forEach(q => {{
+                                    if (q.value) {{
+                                        escapedFeedback += '<div class="question-result"><strong>' + escapeHtml(q.text) + ':</strong> ' + escapeHtml(String(q.value)) + '</div>';
+                                    }}
+                                }});
+                                
+                                if (questionnaireData.q7_what_worked) {{
+                                    escapedFeedback += '<div class="question-result"><strong>What worked well:</strong> ' + escapeHtml(questionnaireData.q7_what_worked).replace(/\\n/g, '<br/>') + '</div>';
+                                }}
+                                
+                                if (questionnaireData.q8_what_felt_off) {{
+                                    escapedFeedback += '<div class="question-result"><strong>What felt off or risky:</strong> ' + escapeHtml(questionnaireData.q8_what_felt_off).replace(/\\n/g, '<br/>') + '</div>';
+                                }}
+                                
+                                escapedFeedback += '</div>';
+                            }} else {{
+                                // Regular text feedback
+                                // 常规文本反馈
+                                escapedFeedback = escapeHtml(feedbackText).replace(/\\n/g, '<br/>');
+                            }}
+                        }} catch (e) {{
+                            // Not JSON, treat as regular text
+                            // 不是 JSON，作为常规文本处理
+                            escapedFeedback = escapeHtml(feedbackText).replace(/\\n/g, '<br/>');
+                        }}
                         
                         // Create feedback item
                         // 创建反馈项
@@ -1192,16 +1235,38 @@ document.addEventListener('DOMContentLoaded', function() {{
                 return;
             }}
             
-            const rdFeedback = form.querySelector('textarea[name="rd_feedback"]').value.trim();
+            // Collect questionnaire data
+            // 收集问卷数据
+            const questionnaireData = {{
+                q1_clinically_appropriate: form.querySelector('input[name="q1_clinically_appropriate"]:checked')?.value || '',
+                q2_main_message: form.querySelector('input[name="q2_main_message"]:checked')?.value || '',
+                q3_reflects_plate: form.querySelector('input[name="q3_reflects_plate"]:checked')?.value || '',
+                q4_action_makes_sense: form.querySelector('input[name="q4_action_makes_sense"]:checked')?.value || '',
+                q5_tone: form.querySelector('input[name="q5_tone"]:checked')?.value || '',
+                q6_comfortable_sending: form.querySelector('input[name="q6_comfortable_sending"]:checked')?.value || '',
+                q7_what_worked: form.querySelector('textarea[name="q7_what_worked"]')?.value.trim() || '',
+                q8_what_felt_off: form.querySelector('textarea[name="q8_what_felt_off"]')?.value.trim() || ''
+            }};
             
             const submitBtn = form.querySelector('.submit-btn');
             const statusDiv = form.querySelector('.form-status');
             
-            if (!rdFeedback) {{
-                statusDiv.textContent = 'Please enter your feedback';
+            // Validate required fields
+            // 验证必填字段
+            if (!questionnaireData.q1_clinically_appropriate || 
+                !questionnaireData.q2_main_message || 
+                !questionnaireData.q3_reflects_plate || 
+                !questionnaireData.q4_action_makes_sense || 
+                !questionnaireData.q5_tone || 
+                !questionnaireData.q6_comfortable_sending) {{
+                statusDiv.textContent = 'Please answer all required questions';
                 statusDiv.className = 'form-status error';
                 return;
             }}
+            
+            // Format feedback as JSON string
+            // 将反馈格式化为 JSON 字符串
+            const rdFeedback = JSON.stringify(questionnaireData, null, 2);
             
             submitBtn.disabled = true;
             statusDiv.textContent = 'Submitting...';
@@ -1219,7 +1284,7 @@ document.addEventListener('DOMContentLoaded', function() {{
                     
                     // Clear form
                     // 清空表单
-                    form.querySelector('textarea[name="rd_feedback"]').value = '';
+                    form.reset();
                 }} else {{
                     statusDiv.textContent = result.error || 'Submission failed';
                     statusDiv.className = 'form-status error';

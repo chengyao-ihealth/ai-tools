@@ -420,7 +420,44 @@ def build_card_html(row, images_dir: Path, display_columns: List[str], row_idx: 
                             timestamp = feedbacked_at
                         
                         escaped_name = html_module.escape(rd_name)
-                        escaped_feedback = html_module.escape(feedback_text).replace("\n", "<br/>")
+                        
+                        # Check if feedback is questionnaire format (JSON)
+                        # 检查反馈是否为问卷格式（JSON）
+                        try:
+                            questionnaire_data = json.loads(feedback_text) if isinstance(feedback_text, str) else feedback_text
+                            if isinstance(questionnaire_data, dict) and 'q1_clinically_appropriate' in questionnaire_data:
+                                # Format questionnaire data
+                                # 格式化问卷数据
+                                questions = [
+                                    ("Clinically appropriate and safe", questionnaire_data.get('q1_clinically_appropriate', '')),
+                                    ("Main message focuses on most important thing", questionnaire_data.get('q2_main_message', '')),
+                                    ("Reasonably reflects what's on plate/log", questionnaire_data.get('q3_reflects_plate', '')),
+                                    ("Suggested action makes sense", questionnaire_data.get('q4_action_makes_sense', '')),
+                                    ("Tone is supportive and patient-friendly", questionnaire_data.get('q5_tone', '')),
+                                    ("Comfortable sending to patients", questionnaire_data.get('q6_comfortable_sending', ''))
+                                ]
+                                
+                                questionnaire_html = '<div class="questionnaire-results">'
+                                for q_text, q_value in questions:
+                                    if q_value:
+                                        questionnaire_html += f'<div class="question-result"><strong>{html_module.escape(q_text)}:</strong> {html_module.escape(str(q_value))}</div>'
+                                
+                                if questionnaire_data.get('q7_what_worked'):
+                                    questionnaire_html += f'<div class="question-result"><strong>What worked well:</strong> {html_module.escape(questionnaire_data["q7_what_worked"]).replace(chr(10), "<br/>")}</div>'
+                                
+                                if questionnaire_data.get('q8_what_felt_off'):
+                                    questionnaire_html += f'<div class="question-result"><strong>What felt off or risky:</strong> {html_module.escape(questionnaire_data["q8_what_felt_off"]).replace(chr(10), "<br/>")}</div>'
+                                
+                                questionnaire_html += '</div>'
+                                escaped_feedback = questionnaire_html
+                            else:
+                                # Regular text feedback
+                                # 常规文本反馈
+                                escaped_feedback = html_module.escape(feedback_text).replace("\n", "<br/>")
+                        except (json.JSONDecodeError, TypeError):
+                            # Not JSON, treat as regular text
+                            # 不是 JSON，作为常规文本处理
+                            escaped_feedback = html_module.escape(feedback_text).replace("\n", "<br/>")
                         
                         feedback_items.append(
                             f'<div class="review-display-item">'
@@ -438,17 +475,106 @@ def build_card_html(row, images_dir: Path, display_columns: List[str], row_idx: 
     
     review_form = f"""
         <div class="review-form">
-            <div class="review-form-title">Add RD Feedback</div>
+            <div class="review-form-title">Feedback</div>
             <div class="review-form-hint">For labeling the quality of AI-generated content</div>
             <form class="rd-feedback-form" data-foodlog-id="{html_module.escape(foodlog_id)}">
                 <div class="form-group">
                     <label for="rd-name-{html_module.escape(foodlog_id)}">RD Name:</label>
                     <input type="text" id="rd-name-{html_module.escape(foodlog_id)}" name="rd_name" class="form-input" required />
                 </div>
+                
                 <div class="form-group">
-                    <label for="rd-feedback-{html_module.escape(foodlog_id)}">Feedback (AI Content Quality Assessment):</label>
-                    <textarea id="rd-feedback-{html_module.escape(foodlog_id)}" name="rd_feedback" class="form-textarea" rows="3" placeholder="Please assess the quality of AI-generated content..." required></textarea>
+                    <div class="question-item">
+                        <div class="question-text">This insight is clinically appropriate and safe for a patient to receive.<span class="required-asterisk">*</span></div>
+                        <div class="question-hint">Rate: 1–5 (Strongly disagree → Strongly agree)</div>
+                        <div class="rating-group">
+                            <label><input type="radio" name="q1_clinically_appropriate" value="1" required> 1</label>
+                            <label><input type="radio" name="q1_clinically_appropriate" value="2" required> 2</label>
+                            <label><input type="radio" name="q1_clinically_appropriate" value="3" required> 3</label>
+                            <label><input type="radio" name="q1_clinically_appropriate" value="4" required> 4</label>
+                            <label><input type="radio" name="q1_clinically_appropriate" value="5" required> 5</label>
+                        </div>
+                    </div>
                 </div>
+                
+                <div class="form-group">
+                    <div class="question-item">
+                        <div class="question-text">The main message focuses on the most important thing about this meal.<span class="required-asterisk">*</span></div>
+                        <div class="question-hint">Rate: 1–5 (Strongly disagree → Strongly agree)</div>
+                        <div class="rating-group">
+                            <label><input type="radio" name="q2_main_message" value="1" required> 1</label>
+                            <label><input type="radio" name="q2_main_message" value="2" required> 2</label>
+                            <label><input type="radio" name="q2_main_message" value="3" required> 3</label>
+                            <label><input type="radio" name="q2_main_message" value="4" required> 4</label>
+                            <label><input type="radio" name="q2_main_message" value="5" required> 5</label>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <div class="question-item">
+                        <div class="question-text">The insight reasonably reflects what's on the plate or in the log.<span class="required-asterisk">*</span></div>
+                        <div class="question-hint">Rate: 1–5 (Strongly disagree → Strongly agree)</div>
+                        <div class="rating-group">
+                            <label><input type="radio" name="q3_reflects_plate" value="1" required> 1</label>
+                            <label><input type="radio" name="q3_reflects_plate" value="2" required> 2</label>
+                            <label><input type="radio" name="q3_reflects_plate" value="3" required> 3</label>
+                            <label><input type="radio" name="q3_reflects_plate" value="4" required> 4</label>
+                            <label><input type="radio" name="q3_reflects_plate" value="5" required> 5</label>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <div class="question-item">
+                        <div class="question-text">The suggested action makes sense as a secondary step for this meal and timing. (N/A if no action)<span class="required-asterisk">*</span></div>
+                        <div class="question-hint">Rate: 1–5 (Strongly disagree → Strongly agree) or N/A</div>
+                        <div class="rating-group">
+                            <label><input type="radio" name="q4_action_makes_sense" value="1" required> 1</label>
+                            <label><input type="radio" name="q4_action_makes_sense" value="2" required> 2</label>
+                            <label><input type="radio" name="q4_action_makes_sense" value="3" required> 3</label>
+                            <label><input type="radio" name="q4_action_makes_sense" value="4" required> 4</label>
+                            <label><input type="radio" name="q4_action_makes_sense" value="5" required> 5</label>
+                            <label><input type="radio" name="q4_action_makes_sense" value="N/A" required> N/A</label>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <div class="question-item">
+                        <div class="question-text">The tone is supportive, non-judgmental, and patient-friendly.<span class="required-asterisk">*</span></div>
+                        <div class="question-hint">Rate: 1–5 (Strongly disagree → Strongly agree)</div>
+                        <div class="rating-group">
+                            <label><input type="radio" name="q5_tone" value="1" required> 1</label>
+                            <label><input type="radio" name="q5_tone" value="2" required> 2</label>
+                            <label><input type="radio" name="q5_tone" value="3" required> 3</label>
+                            <label><input type="radio" name="q5_tone" value="4" required> 4</label>
+                            <label><input type="radio" name="q5_tone" value="5" required> 5</label>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <div class="question-item">
+                        <div class="question-text">I would feel comfortable sending this to one of my patients.<span class="required-asterisk">*</span></div>
+                        <div class="question-hint">Yes / No</div>
+                        <div class="rating-group">
+                            <label><input type="radio" name="q6_comfortable_sending" value="Yes" required> Yes</label>
+                            <label><input type="radio" name="q6_comfortable_sending" value="No" required> No</label>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="q7_what_worked-{html_module.escape(foodlog_id)}">What worked well here? (optional)</label>
+                    <textarea id="q7_what_worked-{html_module.escape(foodlog_id)}" name="q7_what_worked" class="form-textarea" rows="2" placeholder="Short text"></textarea>
+                </div>
+                
+                <div class="form-group">
+                    <label for="q8_what_felt_off-{html_module.escape(foodlog_id)}">What felt off or risky? (optional)</label>
+                    <textarea id="q8_what_felt_off-{html_module.escape(foodlog_id)}" name="q8_what_felt_off" class="form-textarea" rows="2" placeholder="Short text"></textarea>
+                </div>
+                
                 <button type="submit" class="submit-btn">Submit</button>
                 <div class="form-status"></div>
             </form>
@@ -505,7 +631,7 @@ h1 {{
 }}
 .grid {{
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
   gap: 16px;
 }}
 .card {{
@@ -715,6 +841,44 @@ h1 {{
 .form-status.error {{
   color: #ef4444;
 }}
+.question-item {{
+  margin-bottom: 12px;
+}}
+.question-text {{
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  margin-bottom: 4px;
+}}
+.required-asterisk {{
+  color: #ef4444;
+  margin-left: 4px;
+}}
+.question-hint {{
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 8px;
+  font-style: italic;
+}}
+.rating-group {{
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}}
+.rating-group label {{
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  margin: 0;
+}}
+.rating-group input[type="radio"] {{
+  margin: 0;
+  cursor: pointer;
+}}
 .review-display {{
   margin-top: 12px; padding: 10px; background: #f0f9ff; border: 1px solid #bae6fd;
   border-radius: 6px;
@@ -736,6 +900,15 @@ h1 {{
 }}
 .review-display-meta {{
   font-size: 11px; color: var(--muted); margin-top: 6px;
+}}
+.questionnaire-results {{
+  display: flex; flex-direction: column; gap: 8px;
+}}
+.question-result {{
+  font-size: 12px; line-height: 1.5;
+}}
+.question-result strong {{
+  color: var(--text); font-weight: 600;
 }}
 </style>
 </head>
