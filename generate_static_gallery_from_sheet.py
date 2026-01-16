@@ -92,50 +92,100 @@ def get_credentials():
     return creds
 
 
-def read_sheet_as_dataframe(spreadsheet_id: str, sheet_name: str = None) -> pd.DataFrame:
-    """Read Google Sheet data into pandas DataFrame."""
-    creds = get_credentials()
-    sheets_service = build('sheets', 'v4', credentials=creds)
+def read_sheet_as_dataframe(spreadsheet_id: str, sheet_name: str = None, api_key: str = None) -> tuple[pd.DataFrame, str]:
+    """Read Google Sheet data into pandas DataFrame.
+    
+    Can use either API key (for public sheets) or OAuth credentials (for private sheets).
+    If api_key is provided, uses API key. Otherwise, uses OAuth credentials.
+    """
+    if api_key:
+        # Use API key for public sheets (no OAuth needed)
+        # 使用 API key 读取公开的 Sheet（不需要 OAuth）
+        sheets_service = build('sheets', 'v4', developerKey=api_key)
+    else:
+        # Use OAuth credentials for private sheets
+        # 使用 OAuth 凭据读取私有的 Sheet
+        creds = get_credentials()
+        sheets_service = build('sheets', 'v4', credentials=creds)
     
     try:
-        # First, get the spreadsheet metadata to find the actual sheet name
-        # 首先，获取 spreadsheet 元数据以找到实际的 sheet 名称
-        spreadsheet = sheets_service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
-        sheets = spreadsheet.get('sheets', [])
+        # Determine sheet name to use
+        # 确定要使用的 sheet 名称
+        actual_sheet_name = sheet_name if sheet_name else "Sheet1"
         
-        if not sheets:
-            raise Exception("Spreadsheet has no sheets")
+        # If using API key and no sheet name specified, read without sheet name (uses first sheet)
+        # 如果使用 API key 且未指定 sheet 名称，不使用 sheet 名称读取（使用第一个 sheet）
+        if api_key and not sheet_name:
+            print(f"[INFO] Using API key without sheet name, will read first sheet", file=sys.stderr)
+            actual_sheet_name = ""
         
-        # If sheet_name is provided, try to find it; otherwise use the first sheet
-        # 如果提供了 sheet_name，尝试找到它；否则使用第一个 sheet
-        actual_sheet_name = None
-        if sheet_name:
-            for sheet in sheets:
-                if sheet['properties']['title'] == sheet_name:
-                    actual_sheet_name = sheet_name
-                    break
-            if not actual_sheet_name:
-                # Sheet name not found, use first available and warn
-                # Sheet 名称未找到，使用第一个可用的并警告
-                available_sheets = [s['properties']['title'] for s in sheets]
-                print(f"[WARN] Sheet '{sheet_name}' not found. Using first available sheet: {sheets[0]['properties']['title']}", file=sys.stderr)
-                print(f"[INFO] Available sheets: {', '.join(available_sheets)}", file=sys.stderr)
-                actual_sheet_name = sheets[0]['properties']['title']
-        else:
-            # Use first sheet if no name provided
-            actual_sheet_name = sheets[0]['properties']['title']
-        
-        print(f"[INFO] Using sheet: {actual_sheet_name}")
+        # Try to get spreadsheet metadata to verify sheet exists (only if using OAuth)
+        # 尝试获取 spreadsheet 元数据以验证 sheet 存在（仅在使用 OAuth 时）
+        if not api_key:
+            try:
+                spreadsheet = sheets_service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+                sheets = spreadsheet.get('sheets', [])
+                if sheets:
+                    available_sheets = [s['properties']['title'] for s in sheets]
+                    if sheet_name:
+                        # Check if specified sheet exists
+                        # 检查指定的 sheet 是否存在
+                        if sheet_name not in available_sheets:
+                            print(f"[WARN] Sheet '{sheet_name}' not found. Using first available sheet: {sheets[0]['properties']['title']}", file=sys.stderr)
+                            print(f"[INFO] Available sheets: {', '.join(available_sheets)}", file=sys.stderr)
+                            actual_sheet_name = sheets[0]['properties']['title']
+                        else:
+                            actual_sheet_name = sheet_name
+                    else:
+                        actual_sheet_name = sheets[0]['properties']['title']
+            except Exception as e:
+                print(f"[WARN] Could not get sheet metadata, using provided/default name: {actual_sheet_name}", file=sys.stderr)
         
         # Read all data from the sheet
-        # Use a simpler range format that Google Sheets API prefers
-        # 使用 Google Sheets API 更喜欢的简单范围格式
-        range_name = f"'{actual_sheet_name}'!A1:ZZ1000"
+        # 读取 sheet 中的所有数据
+        if not actual_sheet_name:
+            # No sheet name specified, read without sheet name (uses first sheet)
+            # 未指定 sheet 名称，不使用 sheet 名称读取（使用第一个 sheet）
+            print(f"[INFO] Reading first sheet without name", file=sys.stderr)
+            range_name = "A1:ZZ1000"
+        else:
+            print(f"[INFO] Using sheet: {actual_sheet_name}")
+            # Escape sheet name if it contains special characters
+            # 如果 sheet 名称包含特殊字符，需要转义
+            # Sheet names with spaces or special chars need to be wrapped in single quotes
+            # 包含空格或特殊字符的 sheet 名称需要用单引号包裹
+            if ' ' in actual_sheet_name or any(c in actual_sheet_name for c in ['!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '-', '+', '=', '[', ']', '{', '}', '|', '\\', ':', ';', '"', "'", '<', '>', ',', '.', '?', '/']):
+                range_name = f"'{actual_sheet_name}'!A1:ZZ1000"
+            else:
+                range_name = f"{actual_sheet_name}!A1:ZZ1000"
         
-        result = sheets_service.spreadsheets().values().get(
-            spreadsheetId=spreadsheet_id,
-            range=range_name
-        ).execute()
+        try:
+            result = sheets_service.spreadsheets().values().get(
+                spreadsheetId=spreadsheet_id,
+                range=range_name
+            ).execute()
+        except HttpError as e:
+            # If using API key and sheet name fails, try without sheet name (uses first sheet)
+            # 如果使用 API key 且 sheet 名称失败，尝试不使用 sheet 名称（使用第一个 sheet）
+            if api_key and sheet_name:
+                print(f"[WARN] Failed to read sheet '{actual_sheet_name}', trying without sheet name...", file=sys.stderr)
+                try:
+                    # Try reading without sheet name (will use first sheet)
+                    # 尝试不使用 sheet 名称读取（将使用第一个 sheet）
+                    result = sheets_service.spreadsheets().values().get(
+                        spreadsheetId=spreadsheet_id,
+                        range="A1:ZZ1000"
+                    ).execute()
+                    print(f"[INFO] Successfully read first sheet (without name)", file=sys.stderr)
+                    # When reading without sheet name, we can't determine the actual name with API key
+                    # 不使用 sheet 名称读取时，使用 API key 无法确定实际的名称
+                    # Set to empty string to indicate no sheet name should be used in JavaScript
+                    # 设置为空字符串，表示在 JavaScript 中不应使用 sheet 名称
+                    actual_sheet_name = ""
+                except HttpError as e2:
+                    raise Exception(f"Failed to read Google Sheet. Original error: {str(e)}. Tried without sheet name: {str(e2)}")
+            else:
+                raise
         
         values = result.get('values', [])
         if not values:
@@ -152,7 +202,7 @@ def read_sheet_as_dataframe(spreadsheet_id: str, sheet_name: str = None) -> pd.D
             rows.append(padded_row[:len(headers)])
         
         df = pd.DataFrame(rows, columns=headers)
-        return df
+        return df, actual_sheet_name
         
     except HttpError as e:
         error_details = str(e)
@@ -192,46 +242,32 @@ def get_client_id_from_credentials() -> str:
     return None
 
 
-def generate_static_gallery_html(spreadsheet_id: str, sheet_name: str = None, images_dir: Path = None, client_id: str = None) -> str:
-    """Generate static HTML gallery from Google Sheet data."""
+def generate_static_gallery_html(spreadsheet_id: str, sheet_name: str = None, images_dir: Path = None, client_id: str = None, api_key: str = None) -> str:
+    """Generate static HTML gallery from Google Sheet data.
+    
+    Args:
+        spreadsheet_id: Google Spreadsheet ID
+        sheet_name: Sheet tab name (optional)
+        images_dir: Directory containing images
+        client_id: OAuth 2.0 Client ID for browser-based feedback submission
+        api_key: Google API Key for reading public sheets (optional, if not provided will use OAuth)
+    """
     try:
-        # Get actual sheet name (will be determined in read_sheet_as_dataframe if not provided)
-        # 获取实际的 sheet 名称（如果未提供，将在 read_sheet_as_dataframe 中确定）
-        creds = get_credentials()
-        sheets_service = build('sheets', 'v4', credentials=creds)
-        spreadsheet = sheets_service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
-        sheets = spreadsheet.get('sheets', [])
-        
-        if not sheets:
-            raise Exception("Spreadsheet has no sheets")
-        
-        # Determine actual sheet name
-        # 确定实际的 sheet 名称
-        actual_sheet_name = None
-        if sheet_name:
-            # Try to find the specified sheet
-            # 尝试找到指定的 sheet
-            for sheet in sheets:
-                if sheet['properties']['title'] == sheet_name:
-                    actual_sheet_name = sheet_name
-                    break
-            if not actual_sheet_name:
-                # Sheet not found, use first available and warn
-                # Sheet 未找到，使用第一个可用的并警告
-                available_sheets = [s['properties']['title'] for s in sheets]
-                print(f"[WARN] Sheet '{sheet_name}' not found. Using first available sheet: {sheets[0]['properties']['title']}", file=sys.stderr)
-                print(f"[INFO] Available sheets: {', '.join(available_sheets)}", file=sys.stderr)
-                actual_sheet_name = sheets[0]['properties']['title']
-        else:
-            # No sheet name provided, use first sheet
-            # 未提供 sheet 名称，使用第一个 sheet
-            actual_sheet_name = sheets[0]['properties']['title']
-        
-        print(f"[INFO] Using sheet: {actual_sheet_name}")
-        
         # Read data from Google Sheet
+        # Use API key if provided (for public sheets), otherwise use OAuth
+        # 如果提供了 API key 则使用它（用于公开的 Sheet），否则使用 OAuth
+        if api_key:
+            print(f"[INFO] Using API key to read Google Sheet (public sheet)")
+        else:
+            print(f"[INFO] Using OAuth to read Google Sheet (private sheet)")
+        
         print(f"[INFO] Reading data from Google Sheet: {spreadsheet_id}")
-        df = read_sheet_as_dataframe(spreadsheet_id, actual_sheet_name)
+        df, actual_sheet_name = read_sheet_as_dataframe(spreadsheet_id, sheet_name, api_key)
+        
+        # If actual_sheet_name is empty, it means we read without sheet name (API key case)
+        # 如果 actual_sheet_name 为空，表示我们未使用 sheet 名称读取（API key 情况）
+        if not actual_sheet_name:
+            print(f"[WARN] Using API key and sheet name not specified or invalid. JavaScript will use first sheet without name.", file=sys.stderr)
         
         if "ImgName" not in df.columns:
             return f"<html><body><h1>Error</h1><p>Google Sheet does not have ImgName column</p></body></html>"
@@ -246,8 +282,16 @@ def generate_static_gallery_html(spreadsheet_id: str, sheet_name: str = None, im
                 print(f"[WARN] Failed to render row {idx}: {e}", file=sys.stderr)
                 continue
         
-        # Build HTML
+        # Build HTML with dynamic header (will be updated by JavaScript)
+        # 构建带有动态头部的 HTML（将由 JavaScript 更新）
         html_content = build_html("".join(cards_html), title="FoodLog Gallery - RD Feedback")
+        
+        # Replace the static "by Chengyao" with a placeholder that will be updated by JavaScript
+        # 将静态的 "by Chengyao" 替换为将由 JavaScript 更新的占位符
+        html_content = html_content.replace(
+            '<div class="hint">by Chengyao </div>',
+            '<div class="hint" id="user-name-display">by Chengyao</div>'
+        )
         
         # Get client_id if not provided
         if not client_id:
@@ -278,6 +322,21 @@ let gapiInitialized = false;
 // Token 存储键
 const TOKEN_STORAGE_KEY = 'google_sheets_access_token';
 const TOKEN_EXPIRY_KEY = 'google_sheets_token_expiry';
+
+// Helper function to format range with proper sheet name escaping
+// 辅助函数：正确格式化 range，处理 sheet 名称中的特殊字符
+function formatRange(range) {{
+    // If SHEET_NAME is empty, don't use sheet name (will use first sheet)
+    // 如果 SHEET_NAME 为空，不使用 sheet 名称（将使用第一个 sheet）
+    if (!SHEET_NAME) {{
+        return range;
+    }}
+    // If sheet name contains spaces or special characters, wrap it in single quotes
+    // 如果 sheet 名称包含空格或特殊字符，用单引号包裹
+    const needsQuotes = /[\\s!@#$%^&*()+=\\[\\]{{}}\\|\\\\:;"'<>,\\.?/]/.test(SHEET_NAME);
+    const sheetPart = needsQuotes ? `'${{SHEET_NAME}}'` : SHEET_NAME;
+    return `${{sheetPart}}!${{range}}`;
+}}
 
 // Load saved token from localStorage
 // 从 localStorage 加载保存的 token
@@ -410,8 +469,6 @@ function initGoogleAPI() {{
                 // 如果只是 discovery doc 问题，尝试仍然设置初始化
                 gapiInitialized = true;
             }});
-        }}).catch(err => {{
-            console.error('[ERROR] Failed to load Google API:', err);
         }});
     }} else {{
         console.error('[ERROR] gapi is not defined');
@@ -443,7 +500,7 @@ async function findColumnIndex(columnName) {{
     try {{
         const response = await gapi.client.sheets.spreadsheets.values.get({{
             spreadsheetId: GOOGLE_SHEET_ID,
-            range: `${{SHEET_NAME}}!1:1`,
+            range: formatRange('1:1'),
         }});
         
         const headers = response.result.values[0] || [];
@@ -472,7 +529,7 @@ async function createColumnIfNotExists(columnName) {{
         // 获取表头以找到最后一列
         const response = await gapi.client.sheets.spreadsheets.values.get({{
             spreadsheetId: GOOGLE_SHEET_ID,
-            range: `${{SHEET_NAME}}!1:1`,
+            range: formatRange('1:1'),
         }});
         
         const headers = response.result.values[0] || [];
@@ -483,7 +540,7 @@ async function createColumnIfNotExists(columnName) {{
         // 添加新列的表头
         await gapi.client.sheets.spreadsheets.values.update({{
             spreadsheetId: GOOGLE_SHEET_ID,
-            range: `${{SHEET_NAME}}!${{colLetter}}1`,
+            range: formatRange(`${{colLetter}}1`),
             valueInputOption: 'RAW',
             values: [[columnName]],
         }});
@@ -503,7 +560,7 @@ async function findRowIndex(foodlogId) {{
     try {{
         const response = await gapi.client.sheets.spreadsheets.values.get({{
             spreadsheetId: GOOGLE_SHEET_ID,
-            range: `${{SHEET_NAME}}!A:ZZ`,
+            range: formatRange('A:ZZ'),
         }});
         
         const values = response.result.values || [];
@@ -638,7 +695,7 @@ async function addFeedbackViaSheetsAPI(foodlogId, rdName, rdFeedback) {{
         try {{
             const readResponse = await gapi.client.sheets.spreadsheets.values.get({{
                 spreadsheetId: GOOGLE_SHEET_ID,
-                range: `${{SHEET_NAME}}!${{colLetter}}${{rowIdx}}`,
+                range: formatRange(`${{colLetter}}${{rowIdx}}`),
             }});
             
             if (readResponse.result.values && readResponse.result.values[0]) {{
@@ -684,7 +741,7 @@ async function addFeedbackViaSheetsAPI(foodlogId, rdName, rdFeedback) {{
         console.log('[DEBUG] Writing to sheet...');
         await gapi.client.sheets.spreadsheets.values.update({{
             spreadsheetId: GOOGLE_SHEET_ID,
-            range: `${{SHEET_NAME}}!${{colLetter}}${{rowIdx}}`,
+            range: formatRange(`${{colLetter}}${{rowIdx}}`),
             valueInputOption: 'RAW',
             values: [[JSON.stringify(feedbackList)]],
         }});
@@ -738,7 +795,7 @@ async function refreshFeedbacksFromSheet() {{
         // 从 sheet 读取所有数据
         const response = await gapi.client.sheets.spreadsheets.values.get({{
             spreadsheetId: GOOGLE_SHEET_ID,
-            range: `${{SHEET_NAME}}!A:ZZ`,
+            range: formatRange('A:ZZ'),
         }});
         
         const values = response.result.values || [];
@@ -869,6 +926,15 @@ async function refreshFeedbacksFromSheet() {{
     }}
 }}
 
+// Update header with user name
+// 用用户名更新头部
+function updateHeaderWithUserName(userName) {{
+    const hintDiv = document.getElementById('user-name-display') || document.querySelector('.header .hint');
+    if (hintDiv && userName) {{
+        hintDiv.textContent = 'by ' + userName;
+    }}
+}}
+
 // Show/hide login overlay
 // 显示/隐藏登录覆盖层
 function showLoginOverlay() {{
@@ -958,7 +1024,7 @@ function handleLogin() {{
     
     console.log('[DEBUG] Login button clicked, requesting authorization...');
     
-    tokenClient.callback = (response) => {{
+    tokenClient.callback = async (response) => {{
         // Re-enable login button
         // 重新启用登录按钮
         if (loginBtn) {{
@@ -982,6 +1048,10 @@ function handleLogin() {{
         if (response.expires_in) {{
             saveToken(accessToken, response.expires_in);
         }}
+        
+        // Update header with user name
+        // 用用户名更新头部
+        updateHeaderWithUserName(userName);
         
         // Initialize gapi if not already initialized
         // 如果尚未初始化则初始化 gapi
@@ -1071,6 +1141,81 @@ document.addEventListener('DOMContentLoaded', function() {{
             }}
         }}, 1000);
     }}
+    
+    // Update header with saved user name
+    // 用保存的用户名更新头部
+    const savedName = getSavedUserName();
+    if (savedName) {{
+        updateHeaderWithUserName(savedName);
+    }}
+    
+    // Handle form submissions
+    // 处理表单提交
+    const forms = document.querySelectorAll('.rd-feedback-form');
+    forms.forEach(function(form) {{
+        form.addEventListener('submit', async function(e) {{
+            e.preventDefault();
+            
+            const foodlogId = form.getAttribute('data-foodlog-id');
+            
+            // Get saved user name from localStorage
+            // 从 localStorage 获取保存的用户名
+            const rdName = getSavedUserName();
+            
+            if (!rdName) {{
+                const statusDiv = form.querySelector('.form-status');
+                statusDiv.textContent = 'Please sign in first';
+                statusDiv.className = 'form-status error';
+                showLoginOverlay();
+                return;
+            }}
+            
+            const rdFeedback = form.querySelector('textarea[name="rd_feedback"]').value.trim();
+            
+            const submitBtn = form.querySelector('.submit-btn');
+            const statusDiv = form.querySelector('.form-status');
+            
+            if (!rdFeedback) {{
+                statusDiv.textContent = 'Please enter your feedback';
+                statusDiv.className = 'form-status error';
+                return;
+            }}
+            
+            submitBtn.disabled = true;
+            statusDiv.textContent = 'Submitting...';
+            statusDiv.className = 'form-status';
+            
+            try {{
+                console.log('[DEBUG] Form submitted, calling addFeedbackViaSheetsAPI...');
+                const result = await addFeedbackViaSheetsAPI(foodlogId, rdName, rdFeedback);
+                console.log('[DEBUG] Result received:', result);
+                const response = {{ ok: result.success, json: async () => result }};
+                
+                if (response.ok && result.success) {{
+                    statusDiv.textContent = 'Success! Feedback saved.';
+                    statusDiv.className = 'form-status success';
+                    
+                    // Add feedback to display immediately without reloading
+                    // 立即将反馈添加到显示区域，无需重新加载
+                    addFeedbackToDisplay(foodlogId, rdName, rdFeedback);
+                    
+                    // Clear form
+                    // 清空表单
+                    form.querySelector('textarea[name="rd_feedback"]').value = '';
+                }} else {{
+                    statusDiv.textContent = result.error || 'Submission failed';
+                    statusDiv.className = 'form-status error';
+                }}
+            }} catch (error) {{
+                console.error('[ERROR] Exception during submission:', error);
+                console.error('[ERROR] Error stack:', error.stack);
+                statusDiv.textContent = 'Submission failed: ' + (error.message || 'Unknown error');
+                statusDiv.className = 'form-status error';
+            }} finally {{
+                submitBtn.disabled = false;
+            }}
+        }});
+    }});
 }});
 </script>
 """
@@ -1093,12 +1238,57 @@ document.addEventListener('DOMContentLoaded', function() {{
             r"\s+const result = await response\.json\(\);"
         )
         
-        new_fetch_code = """console.log('[DEBUG] Form submitted, calling addFeedbackViaSheetsAPI...');
-                const result = await addFeedbackViaSheetsAPI(foodlogId, rdName, rdFeedback);
-                console.log('[DEBUG] Result received:', result);
-                const response = { ok: result.success, json: async () => result };"""
+        # Remove the old form submission handler from build_html since we're adding our own
+        # 从 build_html 中移除旧的表单提交处理程序，因为我们要添加自己的
+        # The form submission is now handled in the DOMContentLoaded event listener above
+        # 表单提交现在在上面的 DOMContentLoaded 事件监听器中处理
         
-        html_content = re.sub(old_fetch_pattern, new_fetch_code, html_content, flags=re.DOTALL)
+        # Remove the original form submission code from build_html
+        # 从 build_html 中移除原始的表单提交代码
+        old_form_handler_pattern = (
+            r"const forms = document\.querySelectorAll\('\.rd-feedback-form'\);\s+"
+            r"forms\.forEach\(function\(form\) \{\s+"
+            r"form\.addEventListener\('submit', async function\(e\) \{\s+"
+            r"e\.preventDefault\(\);\s+"
+            r"const foodlogId = form\.getAttribute\('data-foodlog-id'\);\s+"
+            r"const rdName = form\.querySelector\('input\[name=\"rd_name\"\]'\)\.value\.trim\(\);\s+"
+            r"const rdFeedback = form\.querySelector\('textarea\[name=\"rd_feedback\"\]'\)\.value\.trim\(\);\s+"
+            r"const submitBtn = form\.querySelector\('\.submit-btn'\);\s+"
+            r"const statusDiv = form\.querySelector\('\.form-status'\);\s+"
+            r"if \(!rdName \|\| !rdFeedback\) \{\s+"
+            r"statusDiv\.textContent = 'Please fill in RD name and feedback';\s+"
+            r"statusDiv\.className = 'form-status error';\s+"
+            r"return;\s+"
+            r"\}\s+"
+            r"submitBtn\.disabled = true;\s+"
+            r"statusDiv\.textContent = 'Submitting\.\.\.';\s+"
+            r"statusDiv\.className = 'form-status';\s+"
+            r"try \{\s+"
+            r"const response = await fetch\('/api/add-review',.*?"
+            r"const result = await response\.json\(\);\s+"
+            r"if \(response\.ok && result\.success\) \{\s+"
+            r"statusDiv\.textContent = 'Success! Feedback saved\.';\s+"
+            r"statusDiv\.className = 'form-status success';\s+"
+            r"// Reload the page.*?"
+            r"setTimeout\(function\(\) \{\s+"
+            r"window\.location\.reload\(\);\s+"
+            r"\}, 500\);\s+"
+            r"\} else \{\s+"
+            r"statusDiv\.textContent = result\.error \|\| 'Submission failed';\s+"
+            r"statusDiv\.className = 'form-status error';\s+"
+            r"\}\s+"
+            r"\} catch \(error\) \{\s+"
+            r"statusDiv\.textContent = 'Submission failed: ' \+ error\.message;\s+"
+            r"statusDiv\.className = 'form-status error';\s+"
+            r"\} finally \{\s+"
+            r"submitBtn\.disabled = false;\s+"
+            r"\}\s+"
+            r"\}\);\s+"
+            r"\}\);\s+"
+            r"\}\);\s+"
+        )
+        
+        html_content = re.sub(old_form_handler_pattern, '', html_content, flags=re.DOTALL)
         
         # Also add error handling improvements to the catch block
         # 同时改进 catch 块的错误处理
@@ -1119,7 +1309,7 @@ document.addEventListener('DOMContentLoaded', function() {{
         add_feedback_display_function = """
 // Function to add feedback item to the display area
 // 将反馈项添加到显示区域的函数
-function addFeedbackToDisplay(foodlogId, rdName, rdFeedback) {
+function addFeedbackToDisplay(foodlogId, rdName, rdFeedback, rdEmail) {
     const reviewDisplay = document.getElementById('review-display-' + foodlogId);
     if (!reviewDisplay) {
         console.error('[ERROR] Review display element not found for foodlogId:', foodlogId);
@@ -1168,12 +1358,103 @@ function addFeedbackToDisplay(foodlogId, rdName, rdFeedback) {
 }
 """
         
-        # Insert the function before the form submission handler
-        # 在表单提交处理程序之前插入函数
-        html_content = html_content.replace(
-            'document.addEventListener(\'DOMContentLoaded\', function() {',
-            add_feedback_display_function + '\n\ndocument.addEventListener(\'DOMContentLoaded\', function() {'
-        )
+        # Remove any existing addFeedbackToDisplay function definition that appears after DOMContentLoaded
+        # 删除出现在 DOMContentLoaded 之后的任何现有 addFeedbackToDisplay 函数定义
+        import re
+        first_dom_loaded_pos = html_content.find('document.addEventListener(\'DOMContentLoaded\'')
+        if first_dom_loaded_pos != -1:
+            # Check if function exists after DOMContentLoaded
+            # 检查函数是否在 DOMContentLoaded 之后存在
+            section_after_dom = html_content[first_dom_loaded_pos:]
+            func_comment = '// Function to add feedback item to the display area'
+            if func_comment in section_after_dom:
+                # Find the function start
+                # 找到函数开始位置
+                func_start_in_section = section_after_dom.find(func_comment)
+                func_start_absolute = first_dom_loaded_pos + func_start_in_section
+                
+                # Find the function end by counting braces (handles nested functions)
+                # 通过计算大括号找到函数结尾（处理嵌套函数）
+                func_section = html_content[func_start_absolute:]
+                # Find the function declaration line
+                # 找到函数声明行
+                func_decl_match = re.search(r'function addFeedbackToDisplay\([^)]*\)\s*\{', func_section)
+                if func_decl_match:
+                    # Start counting braces from the opening brace of the function
+                    # 从函数的开始大括号开始计数
+                    brace_start = func_start_absolute + func_decl_match.end() - 1  # Position of '{'
+                    brace_count = 0
+                    func_end_absolute = -1
+                    
+                    # Search from the opening brace to find the matching closing brace
+                    # 从开始大括号开始搜索，找到匹配的闭合大括号
+                    for i in range(brace_start, len(html_content)):
+                        char = html_content[i]
+                        if char == '{':
+                            brace_count += 1
+                        elif char == '}':
+                            brace_count -= 1
+                            if brace_count == 0:
+                                # Found the matching closing brace
+                                # 找到匹配的闭合大括号
+                                # Find the newline after the closing brace
+                                # 找到闭合大括号后的换行符
+                                next_newline = html_content.find('\n', i + 1)
+                                if next_newline != -1:
+                                    func_end_absolute = next_newline + 1
+                                else:
+                                    func_end_absolute = i + 1
+                                break
+                    
+                    if func_end_absolute != -1:
+                        # Remove the function
+                        # 删除函数
+                        html_content = html_content[:func_start_absolute] + html_content[func_end_absolute:]
+        
+        # Now insert the function in the correct location (before DOMContentLoaded)
+        # 现在在正确的位置插入函数（在 DOMContentLoaded 之前）
+        first_dom_loaded_pos = html_content.find('document.addEventListener(\'DOMContentLoaded\'')
+        if first_dom_loaded_pos != -1:
+            section_before_dom = html_content[:first_dom_loaded_pos]
+            if 'function addFeedbackToDisplay' not in section_before_dom:
+                # Try to insert after formatRange function
+                # 尝试在 formatRange 函数之后插入
+                format_range_pattern = 'function formatRange(range)'
+                if format_range_pattern in section_before_dom:
+                    format_range_pos = section_before_dom.find(format_range_pattern)
+                    if format_range_pos != -1:
+                        # Find the closing brace of formatRange function
+                        # 找到 formatRange 函数的闭合大括号
+                        search_start = format_range_pos
+                        brace_pos = section_before_dom.find('}\n', search_start)
+                        if brace_pos == -1:
+                            brace_pos = section_before_dom.find('}\r\n', search_start)
+                        if brace_pos != -1:
+                            # Insert after the closing brace and newline
+                            # 在闭合大括号和换行符之后插入
+                            insert_pos = brace_pos + 2  # After '}\n'
+                            if section_before_dom[brace_pos:brace_pos+3] == '}\r\n':
+                                insert_pos = brace_pos + 3  # After '}\r\n'
+                            html_content = html_content[:insert_pos] + '\n\n' + add_feedback_display_function + '\n' + html_content[insert_pos:]
+                        else:
+                            # Couldn't find closing brace, insert after formatRange line
+                            # 找不到闭合大括号，在 formatRange 行之后插入
+                            next_newline = section_before_dom.find('\n', format_range_pos)
+                            if next_newline != -1:
+                                html_content = html_content[:next_newline + 1] + '\n' + add_feedback_display_function + '\n' + html_content[next_newline + 1:]
+                else:
+                    # formatRange not found, insert after SCOPES
+                    # 找不到 formatRange，在 SCOPES 之后插入
+                    scopes_pattern = "const SCOPES = 'https://www.googleapis.com/auth/spreadsheets';"
+                    if scopes_pattern in section_before_dom:
+                        html_content = html_content.replace(
+                            scopes_pattern,
+                            scopes_pattern + '\n\n' + add_feedback_display_function
+                        )
+                    else:
+                        # Final fallback: insert before DOMContentLoaded
+                        # 最终回退：在 DOMContentLoaded 之前插入
+                        html_content = html_content[:first_dom_loaded_pos] + add_feedback_display_function + '\n\n' + html_content[first_dom_loaded_pos:]
         
         # Replace window.location.reload() with immediate display update
         # 用立即显示更新替换 window.location.reload()
@@ -1233,18 +1514,46 @@ function addFeedbackToDisplay(foodlogId, rdName, rdFeedback) {
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
     max-width: 400px;
     width: 90%;
-    text-align: center;
+    text-align: left;
 }
 .login-box h2 {
     margin: 0 0 16px 0;
     font-size: 20px;
     color: var(--text);
+    text-align: center;
 }
 .login-box p {
     margin: 0 0 24px 0;
     color: var(--muted);
     font-size: 14px;
     line-height: 1.5;
+    text-align: center;
+}
+.login-form-group {
+    margin-bottom: 20px;
+}
+.login-form-group label {
+    display: block;
+    font-size: 13px;
+    color: var(--text);
+    margin-bottom: 6px;
+    font-weight: 500;
+}
+.login-form-group input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 14px;
+    font-family: inherit;
+    background: var(--card);
+    color: var(--text);
+    box-sizing: border-box;
+}
+.login-form-group input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px rgba(59,130,246,0.1);
 }
 .login-form-group {
     margin-bottom: 20px;
@@ -1284,6 +1593,7 @@ function addFeedbackToDisplay(foodlogId, rdName, rdFeedback) {
     cursor: pointer;
     transition: background 0.2s;
     width: 100%;
+    margin-top: 8px;
 }
 .login-btn:hover {
     background: #2563eb;
@@ -1302,6 +1612,13 @@ function addFeedbackToDisplay(foodlogId, rdName, rdFeedback) {
     font-size: 13px;
     display: none;
 }
+.login-hint {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 16px;
+    text-align: center;
+    line-height: 1.5;
+}
 </style>
 <div id="login-overlay" class="login-overlay" style="display: none;">
     <div class="login-box">
@@ -1313,7 +1630,7 @@ function addFeedbackToDisplay(foodlogId, rdName, rdFeedback) {
         </div>
         <button id="login-btn" class="login-btn" onclick="handleLogin()">Sign in with Google</button>
         <div id="login-error" class="login-error"></div>
-        <p style="font-size: 12px; color: var(--muted); margin-top: 16px;">Your access token will be saved in your browser. You won't need to sign in again on future visits.</p>
+        <div class="login-hint">Your access token will be saved in your browser. You won't need to sign in again on future visits.</div>
     </div>
 </div>
 """
@@ -1445,6 +1762,11 @@ def main():
         help='Google OAuth 2.0 Client ID (will try to extract from credentials.json if not provided)'
     )
     parser.add_argument(
+        '--api-key',
+        default=None,
+        help='Google API Key for reading public sheets (optional, if not provided will use OAuth)'
+    )
+    parser.add_argument(
         '--images',
         default='./images',
         help='Images directory (default: ./images)'
@@ -1465,14 +1787,27 @@ def main():
     if not images_dir.exists():
         print(f"[WARN] Images directory does not exist: {images_dir}", file=sys.stderr)
     
-    if not os.path.exists(CREDENTIALS_FILE):
-        print(f"[ERROR] {CREDENTIALS_FILE} not found!", file=sys.stderr)
-        print(f"Please download credentials.json from Google Cloud Console", file=sys.stderr)
-        sys.exit(1)
+    # Get API key from argument or environment variable
+    # 从参数或环境变量获取 API key
+    api_key = args.api_key or os.environ.get('GOOGLE_SHEETS_API_KEY') or os.environ.get('GOOGLE_API_KEY')
+    
+    # Check if API key is provided, otherwise require credentials.json for OAuth
+    # 检查是否提供了 API key，否则需要 credentials.json 用于 OAuth
+    if not api_key:
+        if not os.path.exists(CREDENTIALS_FILE):
+            print(f"[ERROR] {CREDENTIALS_FILE} not found!", file=sys.stderr)
+            print(f"Please either:", file=sys.stderr)
+            print(f"  1. Provide --api-key for reading public sheets, or", file=sys.stderr)
+            print(f"  2. Download credentials.json from Google Cloud Console for OAuth", file=sys.stderr)
+            sys.exit(1)
     
     print(f"[INFO] Google Spreadsheet ID: {spreadsheet_id}")
     print(f"[INFO] Sheet name: {sheet_name}")
     print(f"[INFO] Images directory: {images_dir.resolve()}")
+    if api_key:
+        print(f"[INFO] Using API key for reading (public sheet)")
+    else:
+        print(f"[INFO] Using OAuth for reading (private sheet)")
     
     # Generate HTML
     # 生成 HTML
@@ -1480,7 +1815,8 @@ def main():
         spreadsheet_id,
         sheet_name,
         images_dir,
-        args.client_id
+        args.client_id,
+        api_key
     )
     
     # Save to file
