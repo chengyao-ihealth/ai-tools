@@ -885,20 +885,89 @@ function hideLoginOverlay() {{
     }}
 }}
 
+// Get saved user name from localStorage
+// 从 localStorage 获取保存的用户名
+function getSavedUserName() {{
+    try {{
+        if (typeof Storage !== 'undefined' && window.localStorage) {{
+            return localStorage.getItem('rd_user_name') || '';
+        }}
+    }} catch (e) {{
+        console.warn('[WARN] Failed to get saved user name:', e);
+    }}
+    return '';
+}}
+
 // Handle login button click
 // 处理登录按钮点击
 function handleLogin() {{
+    // Get name from input
+    // 从输入框获取名字
+    const nameInput = document.getElementById('login-name-input');
+    if (!nameInput) {{
+        console.error('[ERROR] Name input not found');
+        return;
+    }}
+    
+    const userName = nameInput.value.trim();
+    if (!userName) {{
+        const errorMsg = document.getElementById('login-error');
+        if (errorMsg) {{
+            errorMsg.textContent = 'Please enter your name';
+            errorMsg.style.display = 'block';
+        }}
+        nameInput.focus();
+        return;
+    }}
+    
+    // Save user name to localStorage for later use
+    // 保存用户名到 localStorage 供后续使用
+    try {{
+        if (typeof Storage !== 'undefined' && window.localStorage) {{
+            localStorage.setItem('rd_user_name', userName);
+            console.log('[DEBUG] Saved user name to localStorage');
+        }}
+    }} catch (e) {{
+        console.warn('[WARN] Failed to save user name:', e);
+    }}
+    
     if (!tokenClient) {{
         console.error('[ERROR] Token client not initialized');
+        const errorMsg = document.getElementById('login-error');
+        if (errorMsg) {{
+            errorMsg.textContent = 'Authorization service not available. Please refresh the page.';
+            errorMsg.style.display = 'block';
+        }}
         return;
+    }}
+    
+    // Disable login button
+    // 禁用登录按钮
+    const loginBtn = document.getElementById('login-btn');
+    if (loginBtn) {{
+        loginBtn.disabled = true;
+        loginBtn.textContent = 'Authorizing...';
+    }}
+    
+    // Hide error message
+    // 隐藏错误消息
+    const errorMsg = document.getElementById('login-error');
+    if (errorMsg) {{
+        errorMsg.style.display = 'none';
     }}
     
     console.log('[DEBUG] Login button clicked, requesting authorization...');
     
     tokenClient.callback = (response) => {{
+        // Re-enable login button
+        // 重新启用登录按钮
+        if (loginBtn) {{
+            loginBtn.disabled = false;
+            loginBtn.textContent = 'Sign in with Google';
+        }}
+        
         if (response.error) {{
             console.error('[ERROR] OAuth error:', response.error);
-            const errorMsg = document.getElementById('login-error');
             if (errorMsg) {{
                 errorMsg.textContent = 'Authorization failed: ' + response.error;
                 errorMsg.style.display = 'block';
@@ -1124,9 +1193,8 @@ function addFeedbackToDisplay(foodlogId, rdName, rdFeedback) {
                     // 立即将反馈添加到显示区域，无需重新加载
                     addFeedbackToDisplay(foodlogId, rdName, rdFeedback);
                     
-                    // Clear form
-                    // 清空表单
-                    form.querySelector('input[name="rd_name"]').value = '';
+                    // Clear form (only feedback, name is from localStorage)
+                    // 清空表单（只清空反馈，名字来自 localStorage）
                     form.querySelector('textarea[name="rd_feedback"]').value = '';"""
         
         html_content = re.sub(reload_pattern, new_success_code, html_content, flags=re.DOTALL)
@@ -1139,7 +1207,7 @@ function addFeedbackToDisplay(foodlogId, rdName, rdFeedback) {
         )
         html_content = html_content.replace(
             "setTimeout(function() {\n                        window.location.reload();\n                    }, 500);",
-            "addFeedbackToDisplay(foodlogId, rdName, rdFeedback);\n                    form.querySelector('input[name=\"rd_name\"]').value = '';\n                    form.querySelector('textarea[name=\"rd_feedback\"]').value = '';"
+            "addFeedbackToDisplay(foodlogId, rdName, rdFeedback);\n                    form.querySelector('textarea[name=\"rd_feedback\"]').value = '';"
         )
         
         # Add login overlay HTML and CSS
@@ -1178,6 +1246,33 @@ function addFeedbackToDisplay(foodlogId, rdName, rdFeedback) {
     font-size: 14px;
     line-height: 1.5;
 }
+.login-form-group {
+    margin-bottom: 20px;
+    text-align: left;
+}
+.login-form-group label {
+    display: block;
+    font-size: 13px;
+    color: var(--text);
+    margin-bottom: 6px;
+    font-weight: 500;
+}
+.login-form-group input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 14px;
+    font-family: inherit;
+    background: var(--card);
+    color: var(--text);
+    box-sizing: border-box;
+}
+.login-form-group input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px rgba(59,130,246,0.1);
+}
 .login-btn {
     padding: 12px 24px;
     background: var(--accent);
@@ -1210,20 +1305,109 @@ function addFeedbackToDisplay(foodlogId, rdName, rdFeedback) {
 </style>
 <div id="login-overlay" class="login-overlay" style="display: none;">
     <div class="login-box">
-        <h2>Google Sheets 授权</h2>
-        <p>需要授权访问 Google Sheets 才能提交和查看反馈。</p>
-        <p style="font-size: 12px; color: var(--muted);">授权后，您的访问令牌将保存在浏览器中，下次访问无需重新登录。</p>
-        <button id="login-btn" class="login-btn" onclick="handleLogin()">使用 Google 账号登录</button>
+        <h2>Google Sheets Authorization</h2>
+        <p>Please enter your name and authorize access to Google Sheets to submit and view feedback.</p>
+        <div class="login-form-group">
+            <label for="login-name-input">Your Name:</label>
+            <input type="text" id="login-name-input" placeholder="Enter your name" required />
+        </div>
+        <button id="login-btn" class="login-btn" onclick="handleLogin()">Sign in with Google</button>
         <div id="login-error" class="login-error"></div>
+        <p style="font-size: 12px; color: var(--muted); margin-top: 16px;">Your access token will be saved in your browser. You won't need to sign in again on future visits.</p>
     </div>
 </div>
 """
+        
+        # Remove RD Name input field from all cards
+        # 从所有卡片中移除 RD Name 输入框
+        import re
+        # Pattern to match the RD Name form group
+        # 匹配 RD Name 表单组的模式
+        rd_name_pattern = r'<div class="form-group">\s*<label[^>]*>RD Name:</label>\s*<input[^>]*name="rd_name"[^>]*/>\s*</div>\s*'
+        html_content = re.sub(rd_name_pattern, '', html_content, flags=re.MULTILINE | re.DOTALL)
+        
+        # Also try a more flexible pattern
+        # 也尝试更灵活的模式
+        rd_name_pattern2 = r'<div class="form-group">.*?<label[^>]*>RD Name:</label>.*?<input[^>]*name="rd_name"[^>]*/>.*?</div>'
+        html_content = re.sub(rd_name_pattern2, '', html_content, flags=re.MULTILINE | re.DOTALL)
+        
+        # Replace form submission to use saved name from localStorage
+        # 替换表单提交以使用 localStorage 中保存的名字
+        # First, replace the rdName assignment
+        # 首先，替换 rdName 赋值
+        old_form_submit_pattern = (
+            r"const rdName = form\.querySelector\('input\[name=\"rd_name\"\]'\)\.value\.trim\(\);"
+        )
+        new_form_submit_code = """// Get saved name from localStorage
+                // 从 localStorage 获取保存的名字
+                const rdName = getSavedUserName();
+                if (!rdName) {{
+                    statusDiv.textContent = 'Please sign in first';
+                    statusDiv.className = 'form-status error';
+                    showLoginOverlay();
+                    return;
+                }}"""
+        
+        html_content = re.sub(old_form_submit_pattern, new_form_submit_code, html_content)
+        
+        # Also handle the case where rdName might be defined differently
+        # 同时处理 rdName 可能以不同方式定义的情况
+        html_content = html_content.replace(
+            "const rdName = form.querySelector('input[name=\"rd_name\"]').value.trim();",
+            """// Get saved name from localStorage
+                const rdName = getSavedUserName();
+                if (!rdName) {
+                    statusDiv.textContent = 'Please sign in first';
+                    statusDiv.className = 'form-status error';
+                    showLoginOverlay();
+                    return;
+                }"""
+        )
+        
+        # Also update the validation check
+        # 同时更新验证检查
+        html_content = html_content.replace(
+            "if (!rdName || !rdFeedback) {",
+            "if (!rdFeedback) {"
+        )
+        html_content = html_content.replace(
+            "statusDiv.textContent = 'Please fill in RD name and feedback';",
+            "statusDiv.textContent = 'Please enter your feedback';"
+        )
+        
+        # Update form clearing to not clear name (since it doesn't exist)
+        # 更新表单清空逻辑，不清空名字（因为不存在）
+        html_content = html_content.replace(
+            "form.querySelector('input[name=\"rd_name\"]').value = '';",
+            ""
+        )
         
         # Insert login overlay before the closing body tag
         # 在 body 标签结束前插入登录覆盖层
         html_content = html_content.replace(
             '</body>',
             login_overlay_html + '</body>'
+        )
+        
+        # Add code to pre-fill name inputs if saved name exists (for backward compatibility)
+        # 如果存在保存的名字，添加代码预填充名字输入框（向后兼容）
+        prefill_name_script = """
+// Pre-fill RD name inputs with saved name (if they exist)
+// 用保存的名字预填充 RD name 输入框（如果存在）
+document.addEventListener('DOMContentLoaded', function() {
+    const savedName = getSavedUserName();
+    if (savedName) {
+        const nameInputs = document.querySelectorAll('input[name="rd_name"]');
+        nameInputs.forEach(input => {
+            input.value = savedName;
+        });
+    }
+});
+"""
+        html_content = html_content.replace(
+            '</script>',
+            prefill_name_script + '</script>',
+            1  # Only replace the first occurrence (the main script tag)
         )
         
         # Insert API config before the existing script
