@@ -869,6 +869,81 @@ async function refreshFeedbacksFromSheet() {{
     }}
 }}
 
+// Show/hide login overlay
+// 显示/隐藏登录覆盖层
+function showLoginOverlay() {{
+    const overlay = document.getElementById('login-overlay');
+    if (overlay) {{
+        overlay.style.display = 'flex';
+    }}
+}}
+
+function hideLoginOverlay() {{
+    const overlay = document.getElementById('login-overlay');
+    if (overlay) {{
+        overlay.style.display = 'none';
+    }}
+}}
+
+// Handle login button click
+// 处理登录按钮点击
+function handleLogin() {{
+    if (!tokenClient) {{
+        console.error('[ERROR] Token client not initialized');
+        return;
+    }}
+    
+    console.log('[DEBUG] Login button clicked, requesting authorization...');
+    
+    tokenClient.callback = (response) => {{
+        if (response.error) {{
+            console.error('[ERROR] OAuth error:', response.error);
+            const errorMsg = document.getElementById('login-error');
+            if (errorMsg) {{
+                errorMsg.textContent = 'Authorization failed: ' + response.error;
+                errorMsg.style.display = 'block';
+            }}
+            return;
+        }}
+        
+        console.log('[DEBUG] Access token obtained');
+        accessToken = response.access_token;
+        // Save token to localStorage
+        // 保存 token 到 localStorage
+        if (response.expires_in) {{
+            saveToken(accessToken, response.expires_in);
+        }}
+        
+        // Initialize gapi if not already initialized
+        // 如果尚未初始化则初始化 gapi
+        if (!gapiInitialized && typeof gapi !== 'undefined') {{
+            gapi.load('client', () => {{
+                gapi.client.init({{
+                    discoveryDocs: DISCOVERY_DOCS,
+                }}).then(() => {{
+                    gapiInitialized = true;
+                    gapi.client.setToken({{ access_token: accessToken }});
+                    console.log('[DEBUG] Google API client initialized after login');
+                    hideLoginOverlay();
+                    refreshFeedbacksFromSheet();
+                }}).catch(err => {{
+                    console.error('[ERROR] Failed to initialize Google API:', err);
+                    gapiInitialized = true; // Set anyway to proceed
+                    hideLoginOverlay();
+                }});
+            }});
+        }} else {{
+            if (gapiInitialized) {{
+                gapi.client.setToken({{ access_token: accessToken }});
+            }}
+            hideLoginOverlay();
+            refreshFeedbacksFromSheet();
+        }}
+    }};
+    
+    tokenClient.requestAccessToken({{ prompt: 'select_account' }});
+}}
+
 // Initialize on page load
 // 页面加载时初始化
 document.addEventListener('DOMContentLoaded', function() {{
@@ -879,31 +954,54 @@ document.addEventListener('DOMContentLoaded', function() {{
     
     if (!CLIENT_ID || CLIENT_ID === 'YOUR_CLIENT_ID_HERE') {{
         console.error('[ERROR] CLIENT_ID is not configured!');
+        showLoginOverlay();
+        return;
     }}
     
-    initGoogleAPI();
+    // Initialize Google Identity Services first (for login button)
+    // 首先初始化 Google Identity Services（用于登录按钮）
+    if (typeof google !== 'undefined' && google.accounts) {{
+        tokenClient = google.accounts.oauth2.initTokenClient({{
+            client_id: CLIENT_ID,
+            scope: SCOPES,
+            callback: (response) => {{
+                // This callback will be set by handleLogin
+                // 这个回调将由 handleLogin 设置
+            }},
+        }});
+        console.log('[DEBUG] Google Identity Services initialized');
+    }}
     
-    // Check if Google API libraries are loaded
-    // 检查 Google API 库是否已加载
-    setTimeout(() => {{
-        if (typeof gapi === 'undefined') {{
-            console.error('[ERROR] Google API (gapi) not loaded. Check if the script tag is correct.');
-        }} else {{
-            console.log('[DEBUG] Google API (gapi) loaded');
-        }}
+    // Try to load saved token
+    // 尝试加载保存的 token
+    const hasToken = loadSavedToken();
+    
+    if (!hasToken) {{
+        // No token, show login overlay
+        // 没有 token，显示登录覆盖层
+        console.log('[DEBUG] No saved token, showing login overlay');
+        showLoginOverlay();
+    }} else {{
+        // Has token, initialize API and refresh feedbacks
+        // 有 token，初始化 API 并刷新反馈
+        console.log('[DEBUG] Found saved token, initializing API...');
+        initGoogleAPI();
         
-        if (typeof google === 'undefined' || !google.accounts) {{
-            console.error('[ERROR] Google Identity Services not loaded. Check if the script tag is correct.');
-        }} else {{
-            console.log('[DEBUG] Google Identity Services loaded');
-        }}
-        
-        // Try to refresh feedbacks after API is loaded (if we have a token)
-        // 在 API 加载后尝试刷新反馈（如果我们有 token）
+        // Check if Google API libraries are loaded
+        // 检查 Google API 库是否已加载
         setTimeout(() => {{
-            refreshFeedbacksFromSheet();
-        }}, 2000);
-    }}, 1000);
+            if (typeof gapi === 'undefined') {{
+                console.error('[ERROR] Google API (gapi) not loaded. Check if the script tag is correct.');
+            }} else {{
+                console.log('[DEBUG] Google API (gapi) loaded');
+                // Try to refresh feedbacks after API is loaded
+                // 在 API 加载后尝试刷新反馈
+                setTimeout(() => {{
+                    refreshFeedbacksFromSheet();
+                }}, 2000);
+            }}
+        }}, 1000);
+    }}
 }});
 </script>
 """
@@ -1042,6 +1140,90 @@ function addFeedbackToDisplay(foodlogId, rdName, rdFeedback) {
         html_content = html_content.replace(
             "setTimeout(function() {\n                        window.location.reload();\n                    }, 500);",
             "addFeedbackToDisplay(foodlogId, rdName, rdFeedback);\n                    form.querySelector('input[name=\"rd_name\"]').value = '';\n                    form.querySelector('textarea[name=\"rd_feedback\"]').value = '';"
+        )
+        
+        # Add login overlay HTML and CSS
+        # 添加登录覆盖层 HTML 和 CSS
+        login_overlay_html = """
+<style>
+.login-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 10000;
+}
+.login-box {
+    background: var(--card);
+    padding: 32px;
+    border-radius: 12px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    max-width: 400px;
+    width: 90%;
+    text-align: center;
+}
+.login-box h2 {
+    margin: 0 0 16px 0;
+    font-size: 20px;
+    color: var(--text);
+}
+.login-box p {
+    margin: 0 0 24px 0;
+    color: var(--muted);
+    font-size: 14px;
+    line-height: 1.5;
+}
+.login-btn {
+    padding: 12px 24px;
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.2s;
+    width: 100%;
+}
+.login-btn:hover {
+    background: #2563eb;
+}
+.login-btn:disabled {
+    background: var(--muted);
+    cursor: not-allowed;
+}
+.login-error {
+    margin-top: 12px;
+    padding: 8px;
+    background: #fee2e2;
+    border: 1px solid #fecaca;
+    border-radius: 6px;
+    color: #dc2626;
+    font-size: 13px;
+    display: none;
+}
+</style>
+<div id="login-overlay" class="login-overlay" style="display: none;">
+    <div class="login-box">
+        <h2>Google Sheets 授权</h2>
+        <p>需要授权访问 Google Sheets 才能提交和查看反馈。</p>
+        <p style="font-size: 12px; color: var(--muted);">授权后，您的访问令牌将保存在浏览器中，下次访问无需重新登录。</p>
+        <button id="login-btn" class="login-btn" onclick="handleLogin()">使用 Google 账号登录</button>
+        <div id="login-error" class="login-error"></div>
+    </div>
+</div>
+"""
+        
+        # Insert login overlay before the closing body tag
+        # 在 body 标签结束前插入登录覆盖层
+        html_content = html_content.replace(
+            '</body>',
+            login_overlay_html + '</body>'
         )
         
         # Insert API config before the existing script
