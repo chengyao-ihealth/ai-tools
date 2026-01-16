@@ -637,6 +637,20 @@ h1 {{
 @media (max-width: 768px) {{
   .grid {{
     grid-template-columns: 1fr;
+    gap: 12px;
+  }}
+  .card {{
+    max-width: 100%;
+    box-sizing: border-box;
+    padding: 10px;
+  }}
+  .images {{
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }}
+  .card img {{
+    max-width: 100%;
+    height: auto;
   }}
 }}
 @media (min-width: 769px) and (max-width: 1024px) {{
@@ -653,6 +667,8 @@ h1 {{
   display: flex;
   flex-direction: column;
   gap: 8px;
+  max-width: 100%;
+  box-sizing: border-box;
 }}
 .images {{
   display: grid;
@@ -661,9 +677,11 @@ h1 {{
 }}
 .card img {{
   width: 100%;
+  max-width: 100%;
   height: auto;
   border-radius: 10px;
   border: 1px solid var(--border);
+  display: block;
 }}
 .img-missing {{
   height: 160px;
