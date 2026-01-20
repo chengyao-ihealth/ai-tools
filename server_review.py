@@ -266,35 +266,61 @@ def format_field_name(field_name: str) -> str:
     return formatted
 
 
-def _build_collapsible_raw_data(raw_data_info: dict, foodlog_id: str) -> str:
+def _build_collapsible_raw_data(raw_data_info: dict, foodlog_id: str, additional_fields: list = None) -> str:
     """Build collapsible HTML for AI Identify Raw Data field.
     为AI Identify Raw Data字段构建可折叠的HTML。
+    
+    Args:
+        raw_data_info: Dictionary with 'label', 'value', and optionally 'allow_html'
+        foodlog_id: Unique identifier for the food log
+        additional_fields: List of tuples (label, value) for additional fields to include
     """
-    if not raw_data_info:
+    if not raw_data_info and not additional_fields:
         return ""
     
-    label = raw_data_info['label']
-    value = raw_data_info['value']
-    allow_html = raw_data_info.get('allow_html', False)
+    # Build content from main field
+    # 从主字段构建内容
+    content_parts = []
+    if raw_data_info:
+        label = raw_data_info['label']
+        value = raw_data_info['value']
+        allow_html = raw_data_info.get('allow_html', False)
+        
+        # Escape HTML if needed
+        # 如果需要则转义HTML
+        if allow_html:
+            safe_value = value.replace("\n", "<br/>")
+        else:
+            safe_value = html_module.escape(value).replace("\n", "<br/>")
+        
+        if safe_value:
+            content_parts.append(f"<div class='ai-raw-data-field'><strong>{html_module.escape(label)}:</strong><div class='ai-raw-data-value'>{safe_value}</div></div>")
     
-    # Escape HTML if needed
-    # 如果需要则转义HTML
-    if allow_html:
-        safe_value = value.replace("\n", "<br/>")
-    else:
-        safe_value = html_module.escape(value).replace("\n", "<br/>")
+    # Add additional fields
+    # 添加额外字段
+    if additional_fields:
+        for field_label, field_value in additional_fields:
+            if field_value:
+                # field_value is already formatted, just escape HTML
+                # field_value 已经格式化，只需转义HTML
+                safe_field_value = html_module.escape(str(field_value)).replace("\n", "<br/>")
+                content_parts.append(f"<div class='ai-raw-data-field'><strong>{html_module.escape(field_label)}:</strong><div class='ai-raw-data-value'>{safe_field_value}</div></div>")
+    
+    if not content_parts:
+        return ""
     
     unique_id = f"raw-data-{html_module.escape(foodlog_id)}"
+    combined_content = "".join(content_parts)
     
     return f"""
     <div class="ai-raw-data-container">
         <button type="button" class="ai-raw-data-toggle" onclick="toggleRawData('{unique_id}')">
             <span class="toggle-icon collapsed" id="toggle-icon-{unique_id}">▼</span>
-            {html_module.escape(label)}
+            AI Identify Raw Data
         </button>
         <div class="ai-raw-data-content" id="{unique_id}">
             <div class="ai-raw-data-scroll">
-                {safe_value}
+                {combined_content}
             </div>
         </div>
     </div>
@@ -344,6 +370,7 @@ def build_card_html(row, images_dir: Path, display_columns: List[str], row_idx: 
     # Fields that should be in AI Generated Content (at the end)
     # 应该放在AI Generated Content中的字段（靠后位置）
     ai_content_fields = {'FoodLogLabels', 'MicroAction', 'ActionFamily', 'BestAnchor'}
+    additional_raw_data_fields = []  # Fields to include in collapsible raw data section
     
     for col in display_columns:
         if col == "ImgName":
@@ -372,19 +399,24 @@ def build_card_html(row, images_dir: Path, display_columns: List[str], row_idx: 
                 # Add AI fields directly to other_fields (no blue box)
                 # 直接将AI字段添加到other_fields（不使用蓝框）
                 other_fields.append(para(formatted_label, formatted_value, escape_html=not allow_html))
+        elif col in {'MicroAction', 'ActionFamily', 'BestAnchor'}:
+            # Collect these fields to include in collapsible raw data section
+            # 收集这些字段以包含在可折叠的原始数据部分
+            formatted_label = format_field_name(col)
+            additional_raw_data_fields.append((formatted_label, formatted_value))
         elif col in ai_content_fields:
-            # Add these fields directly to other_fields (no blue box)
-            # 直接将字段添加到other_fields（不使用蓝框）
+            # Add FoodLogLabels directly to other_fields (no blue box)
+            # 直接将FoodLogLabels添加到other_fields（不使用蓝框）
             allow_html = col.lower() in ['ingredients']
             other_fields.append(para(col, formatted_value, escape_html=not allow_html))
         else:
             allow_html = col.lower() in ['ingredients']
             other_fields.append(para(col, formatted_value, escape_html=not allow_html))
     
-    # Add AI Identify Raw Data as collapsible field (if exists)
-    # 添加AI Identify Raw Data作为可折叠字段（如果存在）
-    if ai_raw_data_field:
-        other_fields.append(_build_collapsible_raw_data(ai_raw_data_field, foodlog_id))
+    # Add AI Identify Raw Data as collapsible field (if exists), including additional fields
+    # 添加AI Identify Raw Data作为可折叠字段（如果存在），包括额外字段
+    if ai_raw_data_field or additional_raw_data_fields:
+        other_fields.append(_build_collapsible_raw_data(ai_raw_data_field, foodlog_id, additional_raw_data_fields))
     
     # Combine other fields
     # 组合其他字段
@@ -797,6 +829,30 @@ h1 {{
 }}
 .ai-raw-data-scroll::-webkit-scrollbar-thumb:hover {{
   background: #94a3b8;
+}}
+.ai-raw-data-field {{
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e2e8f0;
+}}
+.ai-raw-data-field:last-child {{
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}}
+.ai-raw-data-field strong {{
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 6px;
+}}
+.ai-raw-data-value {{
+  font-size: 11px;
+  color: var(--text);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-wrap: break-word;
 }}
 .field {{
   max-width: 100%;
