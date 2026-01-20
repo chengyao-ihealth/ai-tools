@@ -312,7 +312,7 @@ const GOOGLE_SHEET_ID = '{spreadsheet_id}';
 const SHEET_NAME = '{actual_sheet_name}';
 const CLIENT_ID = '{client_id}';
 const DISCOVERY_DOCS = ['https://sheets.googleapis.com/$discovery/rest?version=v4'];
-const SCOPES = 'https://www.googleapis.com/auth/spreadsheets';
+const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/userinfo.email';
 
 let tokenClient;
 let accessToken = null;
@@ -454,13 +454,21 @@ function initGoogleAPI() {{
             console.log('[DEBUG] gapi.load completed, initializing client...');
             gapi.client.init({{
                 discoveryDocs: DISCOVERY_DOCS,
-            }}).then(() => {{
+            }}).then(async () => {{
                 console.log('[DEBUG] Google API client initialized successfully');
                 gapiInitialized = true;
                 // If we already have a token, set it now
                 // 如果已经有 token，现在设置它
                 if (accessToken) {{
                     gapi.client.setToken({{ access_token: accessToken }});
+                    // Try to get user email if not already saved (using userinfo endpoint)
+                    // 如果尚未保存，尝试获取用户邮箱（使用 userinfo endpoint）
+                    if (!getSavedUserEmail()) {{
+                        const userEmail = await getUserEmail();
+                        if (userEmail) {{
+                            console.log('[DEBUG] User email saved on page load:', userEmail);
+                        }}
+                    }}
                 }}
             }}).catch(err => {{
                 console.error('[ERROR] Failed to initialize Google API:', err);
@@ -727,12 +735,17 @@ async function addFeedbackViaSheetsAPI(foodlogId, rdName, rdFeedback) {{
             }}
         }}
         
-        // Add new feedback
-        // 添加新反馈
+        // Get user email for privacy filtering
+        // 获取用户邮箱用于隐私过滤
+        const userEmail = getSavedUserEmail();
+        
+        // Add new feedback with email
+        // 添加新反馈（包含邮箱）
         feedbackList.push({{
             rd_name: rdName,
             feedback: rdFeedback,
-            feedbackedAt: new Date().toISOString()
+            feedbackedAt: new Date().toISOString(),
+            user_email: userEmail  // Add email for privacy filtering
         }});
         console.log('[DEBUG] Adding new feedback, total:', feedbackList.length);
         
@@ -859,9 +872,39 @@ async function refreshFeedbacksFromSheet() {{
             // 清除现有反馈并添加 sheet 中的所有反馈
             reviewDisplay.innerHTML = '';
             
+            // Get current user email and name for privacy filtering
+            // 获取当前用户邮箱和名字用于隐私过滤
+            const currentUserEmail = getSavedUserEmail();
+            const currentUserName = getSavedUserName();
+            const isAdmin = currentUserName && currentUserName.toLowerCase().trim() === 'admin';
+            
             if (feedbackList.length > 0) {{
                 feedbackList.forEach(feedback => {{
                     if (typeof feedback === 'object' && feedback !== null) {{
+                        // Admin users can see all feedbacks
+                        // Admin 用户可以查看所有反馈
+                        if (!isAdmin) {{
+                            // Privacy filter: only show feedbacks from current user's email
+                            // 隐私过滤：只显示当前用户邮箱的反馈
+                            const feedbackEmail = feedback.user_email || '';
+                            
+                            // If current user has email, only show feedbacks with matching email
+                            // 如果当前用户有邮箱，只显示匹配邮箱的反馈
+                            if (currentUserEmail) {{
+                                if (!feedbackEmail || feedbackEmail !== currentUserEmail) {{
+                                    // Skip this feedback if it doesn't belong to current user
+                                    // 如果反馈不属于当前用户则跳过
+                                    return;
+                                }}
+                            }} else {{
+                                // If current user doesn't have email (not logged in), don't show any feedbacks
+                                // 如果当前用户没有邮箱（未登录），不显示任何反馈
+                                return;
+                            }}
+                        }}
+                        // If isAdmin, continue to show all feedbacks (no filtering)
+                        // 如果是 admin，继续显示所有反馈（不过滤）
+                        
                         const rdName = feedback.rd_name || 'Unknown';
                         const feedbackText = feedback.feedback || '';
                         const feedbackedAt = feedback.feedbackedAt || '';
@@ -974,7 +1017,74 @@ async function refreshFeedbacksFromSheet() {{
 function updateHeaderWithUserName(userName) {{
     const hintDiv = document.getElementById('user-name-display') || document.querySelector('.header .hint');
     if (hintDiv && userName) {{
-        hintDiv.textContent = 'Reviewer: ' + userName;
+        // Clear existing content
+        // 清除现有内容
+        hintDiv.innerHTML = '';
+        
+        // Create text span
+        // 创建文本 span
+        const textSpan = document.createElement('span');
+        textSpan.textContent = 'Reviewer: ' + userName;
+        hintDiv.appendChild(textSpan);
+        
+        // Create logout button
+        // 创建登出按钮
+        const logoutBtn = document.createElement('button');
+        logoutBtn.className = 'logout-btn';
+        logoutBtn.textContent = 'Logout';
+        logoutBtn.title = 'Sign out / 登出';
+        logoutBtn.onclick = handleLogout;
+        hintDiv.appendChild(logoutBtn);
+    }}
+}}
+
+// Handle logout
+// 处理登出
+function handleLogout() {{
+    if (confirm('Are you sure you want to sign out? 确定要登出吗？')) {{
+        // Clear all stored data
+        // 清除所有存储的数据
+        try {{
+            if (typeof Storage !== 'undefined' && window.localStorage) {{
+                localStorage.removeItem('rd_user_name');
+                localStorage.removeItem('rd_user_email');
+                localStorage.removeItem(TOKEN_STORAGE_KEY);
+                localStorage.removeItem(TOKEN_EXPIRY_KEY);
+            }}
+        }} catch (e) {{
+            console.warn('[WARN] Failed to clear localStorage:', e);
+        }}
+        
+        // Clear gapi token
+        // 清除 gapi token
+        if (gapiInitialized && gapi.client) {{
+            gapi.client.setToken(null);
+        }}
+        
+        // Clear global variables
+        // 清除全局变量
+        accessToken = null;
+        gapiInitialized = false;
+        
+        // Clear user name display
+        // 清除用户名显示
+        const hintDiv = document.getElementById('user-name-display');
+        if (hintDiv) {{
+            hintDiv.textContent = '';
+        }}
+        
+        // Clear all feedback displays
+        // 清除所有反馈显示
+        const reviewDisplays = document.querySelectorAll('.review-display');
+        reviewDisplays.forEach(display => {{
+            display.innerHTML = '';
+        }});
+        
+        // Show login overlay
+        // 显示登录覆盖层
+        showLoginOverlay();
+        
+        console.log('[DEBUG] User logged out');
     }}
 }}
 
@@ -1027,6 +1137,63 @@ function getSavedUserName() {{
         console.warn('[WARN] Failed to get saved user name:', e);
     }}
     return '';
+}}
+
+// Get saved user email from localStorage
+// 从 localStorage 获取保存的用户邮箱
+function getSavedUserEmail() {{
+    try {{
+        if (typeof Storage !== 'undefined' && window.localStorage) {{
+            return localStorage.getItem('rd_user_email') || '';
+        }}
+    }} catch (e) {{
+        console.warn('[WARN] Failed to get saved user email:', e);
+    }}
+    return '';
+}}
+
+// Get user email from Google OAuth2 userinfo endpoint
+// 从 Google OAuth2 userinfo endpoint 获取用户邮箱
+async function getUserEmail() {{
+    try {{
+        if (!accessToken) {{
+            console.warn('[WARN] No access token, cannot get user email');
+            return '';
+        }}
+        
+        // Use Google OAuth2 userinfo endpoint (no need for People API)
+        // 使用 Google OAuth2 userinfo endpoint（不需要 People API）
+        try {{
+            const response = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {{
+                headers: {{
+                    'Authorization': `Bearer ${{accessToken}}`
+                }}
+            }});
+            
+            if (response.ok) {{
+                const userInfo = await response.json();
+                const email = userInfo.email || '';
+                if (email) {{
+                    console.log('[DEBUG] Got user email from userinfo endpoint:', email);
+                    // Save to localStorage
+                    // 保存到 localStorage
+                    if (typeof Storage !== 'undefined' && window.localStorage) {{
+                        localStorage.setItem('rd_user_email', email);
+                    }}
+                    return email;
+                }}
+            }} else {{
+                console.warn('[WARN] Failed to get email from userinfo endpoint:', response.status, response.statusText);
+            }}
+        }} catch (e) {{
+            console.warn('[WARN] Failed to get email from userinfo endpoint:', e);
+        }}
+        
+        return '';
+    }} catch (e) {{
+        console.warn('[WARN] Failed to get user email:', e);
+        return '';
+    }}
 }}
 
 // Handle login button click
@@ -1124,10 +1291,18 @@ function handleLogin() {{
             gapi.load('client', () => {{
                 gapi.client.init({{
                     discoveryDocs: DISCOVERY_DOCS,
-                }}).then(() => {{
+                }}).then(async () => {{
                     gapiInitialized = true;
                     gapi.client.setToken({{ access_token: accessToken }});
                     console.log('[DEBUG] Google API client initialized after login');
+                    
+                    // Get and save user email (using userinfo endpoint, no People API needed)
+                    // 获取并保存用户邮箱（使用 userinfo endpoint，不需要 People API）
+                    const userEmail = await getUserEmail();
+                    if (userEmail) {{
+                        console.log('[DEBUG] User email saved:', userEmail);
+                    }}
+                    
                     hideLoginOverlay();
                     refreshFeedbacksFromSheet();
                 }}).catch(err => {{
@@ -1139,6 +1314,13 @@ function handleLogin() {{
         }} else {{
             if (gapiInitialized) {{
                 gapi.client.setToken({{ access_token: accessToken }});
+                // Get and save user email
+                // 获取并保存用户邮箱
+                getUserEmail().then(email => {{
+                    if (email) {{
+                        console.log('[DEBUG] User email saved:', email);
+                    }}
+                }});
             }}
             hideLoginOverlay();
             refreshFeedbacksFromSheet();
@@ -1515,6 +1697,29 @@ document.addEventListener('DOMContentLoaded', function() {{
     margin-top: 16px;
     text-align: center;
     line-height: 1.5;
+}
+.logout-btn {
+    margin-left: 8px;
+    padding: 4px 12px;
+    background: #ef4444;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+.logout-btn:hover {
+    background: #dc2626;
+}
+.logout-btn:active {
+    background: #b91c1c;
+}
+#user-name-display {
+    display: flex;
+    align-items: center;
+    gap: 4px;
 }
 </style>
 <div id="login-overlay" class="login-overlay" style="display: none;">
