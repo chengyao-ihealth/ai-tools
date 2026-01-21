@@ -377,6 +377,13 @@ def build_card_html(row, images_dir: Path, display_columns: List[str], row_idx: 
             continue
         value = row[col] if col in row.index else ""
         formatted_value = format_field_value(value, col)
+        
+        # Special handling for FoodLogLabels, MicroAction and ActionFamily - show "none" if empty
+        # 特殊处理 FoodLogLabels, MicroAction 和 ActionFamily - 如果为空则显示 "none"
+        if col in {'FoodLogLabels', 'MicroAction', 'ActionFamily'}:
+            if not formatted_value:
+                formatted_value = "none"
+        
         if not formatted_value:
             continue
         
@@ -399,19 +406,37 @@ def build_card_html(row, images_dir: Path, display_columns: List[str], row_idx: 
                 # Add AI fields directly to other_fields (no blue box)
                 # 直接将AI字段添加到other_fields（不使用蓝框）
                 other_fields.append(para(formatted_label, formatted_value, escape_html=not allow_html))
+        elif col == 'FoodLogLabels':
+            # Add FoodLogLabels to collapsible raw data section (before MicroAction)
+            # 将 FoodLogLabels 添加到可折叠的原始数据部分（在 MicroAction 之前）
+            formatted_label = format_field_name(col)
+            additional_raw_data_fields.append((formatted_label, formatted_value))
         elif col in {'MicroAction', 'ActionFamily', 'BestAnchor'}:
             # Collect these fields to include in collapsible raw data section
             # 收集这些字段以包含在可折叠的原始数据部分
             formatted_label = format_field_name(col)
             additional_raw_data_fields.append((formatted_label, formatted_value))
         elif col in ai_content_fields:
-            # Add FoodLogLabels directly to other_fields (no blue box)
-            # 直接将FoodLogLabels添加到other_fields（不使用蓝框）
+            # Other fields in ai_content_fields (shouldn't happen now, but keep for safety)
+            # ai_content_fields 中的其他字段（现在不应该发生，但保留作为安全措施）
             allow_html = col.lower() in ['ingredients']
             other_fields.append(para(col, formatted_value, escape_html=not allow_html))
         else:
             allow_html = col.lower() in ['ingredients']
             other_fields.append(para(col, formatted_value, escape_html=not allow_html))
+    
+    # Sort additional_raw_data_fields to ensure correct order: FoodLogLabels, then MicroAction, ActionFamily, BestAnchor
+    # 对 additional_raw_data_fields 进行排序以确保正确顺序：FoodLogLabels，然后是 MicroAction, ActionFamily, BestAnchor
+    # Use formatted field names for sorting (format_field_name converts "FoodLogLabels" -> "Food Log Labels")
+    # 使用格式化后的字段名进行排序（format_field_name 将 "FoodLogLabels" 转换为 "Food Log Labels"）
+    field_order = {
+        format_field_name('FoodLogLabels'): 0,
+        format_field_name('MicroAction'): 1,
+        format_field_name('ActionFamily'): 2,
+        format_field_name('BestAnchor'): 3
+    }
+    if additional_raw_data_fields:
+        additional_raw_data_fields.sort(key=lambda x: field_order.get(x[0], 999))
     
     # Add AI Identify Raw Data as collapsible field (if exists), including additional fields
     # 添加AI Identify Raw Data作为可折叠字段（如果存在），包括额外字段
