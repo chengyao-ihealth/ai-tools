@@ -457,28 +457,42 @@ def build_card_html(row, images_dir: Path, display_columns: List[str], row_idx: 
                         # 检查反馈是否为问卷格式（JSON）
                         try:
                             questionnaire_data = json.loads(feedback_text) if isinstance(feedback_text, str) else feedback_text
-                            if isinstance(questionnaire_data, dict) and 'q1_clinically_appropriate' in questionnaire_data:
+                            if isinstance(questionnaire_data, dict) and ('q1_most_important' in questionnaire_data or 'q1_clinically_appropriate' in questionnaire_data):
                                 # Format questionnaire data
                                 # 格式化问卷数据
-                                questions = [
-                                    ("Clinically appropriate and safe", questionnaire_data.get('q1_clinically_appropriate', '')),
-                                    ("Main message focuses on most important thing", questionnaire_data.get('q2_main_message', '')),
-                                    ("Reasonably reflects what's on plate/log", questionnaire_data.get('q3_reflects_plate', '')),
-                                    ("Suggested action makes sense", questionnaire_data.get('q4_action_makes_sense', '')),
-                                    ("Tone is supportive and patient-friendly", questionnaire_data.get('q5_tone', '')),
-                                    ("Comfortable sending to patients", questionnaire_data.get('q6_comfortable_sending', ''))
-                                ]
+                                # Support both old and new format for backward compatibility
+                                if 'q1_most_important' in questionnaire_data:
+                                    # New format
+                                    questions = [
+                                        ("The insight correctly identifies and focuses on the most important thing about this meal", questionnaire_data.get('q1_most_important', '')),
+                                        ("The suggested action (if any) makes sense as a secondary step", questionnaire_data.get('q2_action_makes_sense', '')),
+                                        ("Clinically appropriate, safe, patient-friendly and comfortable sending to a patient", questionnaire_data.get('q3_clinically_appropriate', ''))
+                                    ]
+                                else:
+                                    # Old format (backward compatibility)
+                                    questions = [
+                                        ("Clinically appropriate and safe", questionnaire_data.get('q1_clinically_appropriate', '')),
+                                        ("Main message focuses on most important thing", questionnaire_data.get('q2_main_message', '')),
+                                        ("Reasonably reflects what's on plate/log", questionnaire_data.get('q3_reflects_plate', '')),
+                                        ("Suggested action makes sense", questionnaire_data.get('q4_action_makes_sense', '')),
+                                        ("Tone is supportive and patient-friendly", questionnaire_data.get('q5_tone', '')),
+                                        ("Comfortable sending to patients", questionnaire_data.get('q6_comfortable_sending', ''))
+                                    ]
                                 
                                 questionnaire_html = '<div class="questionnaire-results">'
                                 for q_text, q_value in questions:
                                     if q_value:
                                         questionnaire_html += f'<div class="question-result"><strong>{html_module.escape(q_text)}:</strong> {html_module.escape(str(q_value))}</div>'
                                 
-                                if questionnaire_data.get('q7_what_worked'):
-                                    questionnaire_html += f'<div class="question-result"><strong>What worked well:</strong> {html_module.escape(questionnaire_data["q7_what_worked"]).replace(chr(10), "<br/>")}</div>'
+                                # Support both old and new format for text fields
+                                what_worked = questionnaire_data.get('q4_what_worked') or questionnaire_data.get('q7_what_worked')
+                                what_felt_off = questionnaire_data.get('q5_what_felt_off') or questionnaire_data.get('q8_what_felt_off')
                                 
-                                if questionnaire_data.get('q8_what_felt_off'):
-                                    questionnaire_html += f'<div class="question-result"><strong>What felt off or risky:</strong> {html_module.escape(questionnaire_data["q8_what_felt_off"]).replace(chr(10), "<br/>")}</div>'
+                                if what_worked:
+                                    questionnaire_html += f'<div class="question-result"><strong>What worked well:</strong> {html_module.escape(what_worked).replace(chr(10), "<br/>")}</div>'
+                                
+                                if what_felt_off:
+                                    questionnaire_html += f'<div class="question-result"><strong>What felt off or risky:</strong> {html_module.escape(what_felt_off).replace(chr(10), "<br/>")}</div>'
                                 
                                 questionnaire_html += '</div>'
                                 escaped_feedback = questionnaire_html
@@ -517,94 +531,54 @@ def build_card_html(row, images_dir: Path, display_columns: List[str], row_idx: 
                 
                 <div class="form-group">
                     <div class="question-item">
-                        <div class="question-text">This insight is clinically appropriate and safe for a patient to receive.<span class="required-asterisk">*</span></div>
+                        <div class="question-text">The insight correctly identifies and focuses on the most important thing about this meal.<span class="required-asterisk">*</span></div>
                         <div class="question-hint">Rate: 1–5 (Strongly disagree → Strongly agree)</div>
                         <div class="rating-group">
-                            <label><input type="radio" name="q1_clinically_appropriate" value="1" required> 1</label>
-                            <label><input type="radio" name="q1_clinically_appropriate" value="2" required> 2</label>
-                            <label><input type="radio" name="q1_clinically_appropriate" value="3" required> 3</label>
-                            <label><input type="radio" name="q1_clinically_appropriate" value="4" required> 4</label>
-                            <label><input type="radio" name="q1_clinically_appropriate" value="5" required> 5</label>
+                            <label><input type="radio" name="q1_most_important" value="1" required> 1</label>
+                            <label><input type="radio" name="q1_most_important" value="2" required> 2</label>
+                            <label><input type="radio" name="q1_most_important" value="3" required> 3</label>
+                            <label><input type="radio" name="q1_most_important" value="4" required> 4</label>
+                            <label><input type="radio" name="q1_most_important" value="5" required> 5</label>
                         </div>
                     </div>
                 </div>
                 
                 <div class="form-group">
                     <div class="question-item">
-                        <div class="question-text">The main message focuses on the most important thing about this meal.<span class="required-asterisk">*</span></div>
+                        <div class="question-text">The suggested action (if any) makes sense as a secondary step for this meal and its timing.<span class="required-asterisk">*</span></div>
                         <div class="question-hint">Rate: 1–5 (Strongly disagree → Strongly agree)</div>
                         <div class="rating-group">
-                            <label><input type="radio" name="q2_main_message" value="1" required> 1</label>
-                            <label><input type="radio" name="q2_main_message" value="2" required> 2</label>
-                            <label><input type="radio" name="q2_main_message" value="3" required> 3</label>
-                            <label><input type="radio" name="q2_main_message" value="4" required> 4</label>
-                            <label><input type="radio" name="q2_main_message" value="5" required> 5</label>
+                            <label><input type="radio" name="q2_action_makes_sense" value="1" required> 1</label>
+                            <label><input type="radio" name="q2_action_makes_sense" value="2" required> 2</label>
+                            <label><input type="radio" name="q2_action_makes_sense" value="3" required> 3</label>
+                            <label><input type="radio" name="q2_action_makes_sense" value="4" required> 4</label>
+                            <label><input type="radio" name="q2_action_makes_sense" value="5" required> 5</label>
                         </div>
                     </div>
                 </div>
                 
                 <div class="form-group">
                     <div class="question-item">
-                        <div class="question-text">The insight reasonably reflects what's on the plate or in the log.<span class="required-asterisk">*</span></div>
+                        <div class="question-text">This insight is clinically appropriate, safe, patient-friendly and something I would feel comfortable sending to a patient.<span class="required-asterisk">*</span></div>
                         <div class="question-hint">Rate: 1–5 (Strongly disagree → Strongly agree)</div>
                         <div class="rating-group">
-                            <label><input type="radio" name="q3_reflects_plate" value="1" required> 1</label>
-                            <label><input type="radio" name="q3_reflects_plate" value="2" required> 2</label>
-                            <label><input type="radio" name="q3_reflects_plate" value="3" required> 3</label>
-                            <label><input type="radio" name="q3_reflects_plate" value="4" required> 4</label>
-                            <label><input type="radio" name="q3_reflects_plate" value="5" required> 5</label>
+                            <label><input type="radio" name="q3_clinically_appropriate" value="1" required> 1</label>
+                            <label><input type="radio" name="q3_clinically_appropriate" value="2" required> 2</label>
+                            <label><input type="radio" name="q3_clinically_appropriate" value="3" required> 3</label>
+                            <label><input type="radio" name="q3_clinically_appropriate" value="4" required> 4</label>
+                            <label><input type="radio" name="q3_clinically_appropriate" value="5" required> 5</label>
                         </div>
                     </div>
                 </div>
                 
                 <div class="form-group">
-                    <div class="question-item">
-                        <div class="question-text">The suggested action makes sense as a secondary step for this meal and timing. (N/A if no action)<span class="required-asterisk">*</span></div>
-                        <div class="question-hint">Rate: 1–5 (Strongly disagree → Strongly agree) or N/A</div>
-                        <div class="rating-group">
-                            <label><input type="radio" name="q4_action_makes_sense" value="1" required> 1</label>
-                            <label><input type="radio" name="q4_action_makes_sense" value="2" required> 2</label>
-                            <label><input type="radio" name="q4_action_makes_sense" value="3" required> 3</label>
-                            <label><input type="radio" name="q4_action_makes_sense" value="4" required> 4</label>
-                            <label><input type="radio" name="q4_action_makes_sense" value="5" required> 5</label>
-                            <label><input type="radio" name="q4_action_makes_sense" value="N/A" required> N/A</label>
-                        </div>
-                    </div>
+                    <label for="q4_what_worked-{html_module.escape(foodlog_id)}">What worked well here? (optional)</label>
+                    <textarea id="q4_what_worked-{html_module.escape(foodlog_id)}" name="q4_what_worked" class="form-textarea" rows="2" placeholder="Short text"></textarea>
                 </div>
                 
                 <div class="form-group">
-                    <div class="question-item">
-                        <div class="question-text">The tone is supportive, non-judgmental, and patient-friendly.<span class="required-asterisk">*</span></div>
-                        <div class="question-hint">Rate: 1–5 (Strongly disagree → Strongly agree)</div>
-                        <div class="rating-group">
-                            <label><input type="radio" name="q5_tone" value="1" required> 1</label>
-                            <label><input type="radio" name="q5_tone" value="2" required> 2</label>
-                            <label><input type="radio" name="q5_tone" value="3" required> 3</label>
-                            <label><input type="radio" name="q5_tone" value="4" required> 4</label>
-                            <label><input type="radio" name="q5_tone" value="5" required> 5</label>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="form-group">
-                    <div class="question-item">
-                        <div class="question-text">I would feel comfortable sending this to one of my patients.<span class="required-asterisk">*</span></div>
-                        <div class="question-hint">Yes / No</div>
-                        <div class="rating-group">
-                            <label><input type="radio" name="q6_comfortable_sending" value="Yes" required> Yes</label>
-                            <label><input type="radio" name="q6_comfortable_sending" value="No" required> No</label>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="form-group">
-                    <label for="q7_what_worked-{html_module.escape(foodlog_id)}">What worked well here? (optional)</label>
-                    <textarea id="q7_what_worked-{html_module.escape(foodlog_id)}" name="q7_what_worked" class="form-textarea" rows="2" placeholder="Short text"></textarea>
-                </div>
-                
-                <div class="form-group">
-                    <label for="q8_what_felt_off-{html_module.escape(foodlog_id)}">What felt off or risky? (optional)</label>
-                    <textarea id="q8_what_felt_off-{html_module.escape(foodlog_id)}" name="q8_what_felt_off" class="form-textarea" rows="2" placeholder="Short text"></textarea>
+                    <label for="q5_what_felt_off-{html_module.escape(foodlog_id)}">What felt off or risky? (if you rated anything neutral and below, please add more details) (optional)</label>
+                    <textarea id="q5_what_felt_off-{html_module.escape(foodlog_id)}" name="q5_what_felt_off" class="form-textarea" rows="2" placeholder="Short text"></textarea>
                 </div>
                 
                 <button type="submit" class="submit-btn">Submit</button>
@@ -1041,15 +1015,34 @@ document.addEventListener('DOMContentLoaded', function() {{
             
             const foodlogId = form.getAttribute('data-foodlog-id');
             const rdName = form.querySelector('input[name="rd_name"]').value.trim();
-            const rdFeedback = form.querySelector('textarea[name="rd_feedback"]').value.trim();
+            
+            // Collect questionnaire data
+            // 收集问卷数据
+            const questionnaireData = {{
+                q1_most_important: form.querySelector('input[name="q1_most_important"]:checked')?.value || '',
+                q2_action_makes_sense: form.querySelector('input[name="q2_action_makes_sense"]:checked')?.value || '',
+                q3_clinically_appropriate: form.querySelector('input[name="q3_clinically_appropriate"]:checked')?.value || '',
+                q4_what_worked: form.querySelector('textarea[name="q4_what_worked"]')?.value.trim() || '',
+                q5_what_felt_off: form.querySelector('textarea[name="q5_what_felt_off"]')?.value.trim() || ''
+            }};
+            
             const submitBtn = form.querySelector('.submit-btn');
             const statusDiv = form.querySelector('.form-status');
             
-            if (!rdName || !rdFeedback) {{
-                statusDiv.textContent = 'Please fill in RD name and feedback';
+            // Validate required fields
+            // 验证必填字段
+            if (!rdName || 
+                !questionnaireData.q1_most_important || 
+                !questionnaireData.q2_action_makes_sense || 
+                !questionnaireData.q3_clinically_appropriate) {{
+                statusDiv.textContent = 'Please fill in RD name and answer all required questions';
                 statusDiv.className = 'form-status error';
                 return;
             }}
+            
+            // Format feedback as JSON string
+            // 将反馈格式化为 JSON 字符串
+            const rdFeedback = JSON.stringify(questionnaireData, null, 2);
             
             submitBtn.disabled = true;
             statusDiv.textContent = 'Submitting...';
