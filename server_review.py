@@ -278,9 +278,22 @@ def _build_collapsible_raw_data(raw_data_info: dict, foodlog_id: str, additional
     if not raw_data_info and not additional_fields:
         return ""
     
-    # Build content from main field
-    # 从主字段构建内容
+    # Build content - show additional fields first, then AI Identify Raw Data
+    # 构建内容 - 先显示额外字段，然后显示 AI Identify Raw Data
     content_parts = []
+    
+    # Add additional fields first (FoodLogLabels, MicroAction, ActionFamily, BestAnchor)
+    # 先添加额外字段（FoodLogLabels, MicroAction, ActionFamily, BestAnchor）
+    if additional_fields:
+        for field_label, field_value in additional_fields:
+            if field_value:
+                # field_value is already formatted, just escape HTML
+                # field_value 已经格式化，只需转义HTML
+                safe_field_value = html_module.escape(str(field_value)).replace("\n", "<br/>")
+                content_parts.append(f"<div class='ai-raw-data-field'><strong>{html_module.escape(field_label)}:</strong><div class='ai-raw-data-value'>{safe_field_value}</div></div>")
+    
+    # Add main field (AI Identify Raw Data) after additional fields
+    # 在额外字段之后添加主字段（AI Identify Raw Data）
     if raw_data_info:
         label = raw_data_info['label']
         value = raw_data_info['value']
@@ -296,16 +309,6 @@ def _build_collapsible_raw_data(raw_data_info: dict, foodlog_id: str, additional
         if safe_value:
             content_parts.append(f"<div class='ai-raw-data-field'><strong>{html_module.escape(label)}:</strong><div class='ai-raw-data-value'>{safe_value}</div></div>")
     
-    # Add additional fields
-    # 添加额外字段
-    if additional_fields:
-        for field_label, field_value in additional_fields:
-            if field_value:
-                # field_value is already formatted, just escape HTML
-                # field_value 已经格式化，只需转义HTML
-                safe_field_value = html_module.escape(str(field_value)).replace("\n", "<br/>")
-                content_parts.append(f"<div class='ai-raw-data-field'><strong>{html_module.escape(field_label)}:</strong><div class='ai-raw-data-value'>{safe_field_value}</div></div>")
-    
     if not content_parts:
         return ""
     
@@ -316,7 +319,7 @@ def _build_collapsible_raw_data(raw_data_info: dict, foodlog_id: str, additional
     <div class="ai-raw-data-container">
         <button type="button" class="ai-raw-data-toggle" onclick="toggleRawData('{unique_id}')">
             <span class="toggle-icon collapsed" id="toggle-icon-{unique_id}">▼</span>
-            AI Identify Raw Data
+            AI Identified Data
         </button>
         <div class="ai-raw-data-content" id="{unique_id}">
             <div class="ai-raw-data-scroll">
