@@ -315,19 +315,15 @@ def _build_collapsible_raw_data(raw_data_info: dict, foodlog_id: str, additional
     unique_id = f"raw-data-{html_module.escape(foodlog_id)}"
     combined_content = "".join(content_parts)
     
-    return f"""
-    <div class="ai-raw-data-container">
+    return f"""<div class="ai-raw-data-container">
         <button type="button" class="ai-raw-data-toggle" onclick="toggleRawData('{unique_id}')">
             <span class="toggle-icon collapsed" id="toggle-icon-{unique_id}">▼</span>
             AI Identified Data
         </button>
         <div class="ai-raw-data-content" id="{unique_id}">
-            <div class="ai-raw-data-scroll">
-                {combined_content}
-            </div>
+            <div class="ai-raw-data-scroll">{combined_content}</div>
         </div>
-    </div>
-    """
+    </div>"""
 
 
 def build_card_html(row, images_dir: Path, display_columns: List[str], row_idx: Any = None) -> str:
@@ -815,8 +811,12 @@ h1 {{
   max-height: 400px;
   overflow-y: auto;
   overflow-x: hidden;
-  white-space: pre-wrap;
+  white-space: normal;
   word-wrap: break-word;
+}}
+.ai-raw-data-scroll > .ai-raw-data-field:first-child {{
+  margin-top: 0;
+  padding-top: 0;
 }}
 .ai-raw-data-scroll::-webkit-scrollbar {{
   width: 6px;
