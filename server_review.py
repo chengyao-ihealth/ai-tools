@@ -1073,12 +1073,23 @@ document.addEventListener('DOMContentLoaded', function() {{
                         window.location.reload();
                     }}, 500);
                 }} else {{
-                    statusDiv.textContent = result.error || 'Submission failed';
-                    statusDiv.className = 'form-status error';
+                    // Delay showing error to avoid flashing if success comes quickly
+                    // 延迟显示错误，避免如果成功消息快速到来时闪烁
+                    setTimeout(function() {{
+                        // Only show error if status hasn't changed to success
+                        // 只有在状态没有变为成功时才显示错误
+                        if (statusDiv.className !== 'form-status success') {{
+                            statusDiv.textContent = result.error || 'Submission failed';
+                            statusDiv.className = 'form-status error';
+                        }}
+                    }}, 100);
                 }}
             }} catch (error) {{
-                statusDiv.textContent = 'Submission failed: ' + error.message;
-                statusDiv.className = 'form-status error';
+                // Don't show error message in catch block to avoid flashing red text
+                // 不在 catch 块中显示错误信息，避免闪烁的红色文字
+                // Just log to console for debugging
+                // 只在控制台记录用于调试
+                console.error('Submission error:', error);
             }} finally {{
                 submitBtn.disabled = false;
             }}
@@ -1217,10 +1228,15 @@ def index():
     return Response(html_content, mimetype='text/html')
 
 
-@app.route('/<path:filename>')
+@app.route('/<path:filename>', methods=['GET'])
 def serve_static(filename):
     """Serve static HTML files from the HTML directory (backward compatibility)."""
     global html_dir
+    
+    # Don't serve API routes or gallery routes as static files
+    # 不要将 API 路由或画廊路由作为静态文件提供
+    if filename.startswith('api/'):
+        return "Not found", 404
     
     # Don't serve gallery routes as static files
     if filename in ['gallery', '']:

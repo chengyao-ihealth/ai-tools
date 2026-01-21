@@ -1482,10 +1482,12 @@ document.addEventListener('DOMContentLoaded', function() {{
                     statusDiv.className = 'form-status error';
                 }}
             }} catch (error) {{
+                // Don't show error message in catch block to avoid flashing red text
+                // 不在 catch 块中显示错误信息，避免闪烁的红色文字
+                // Just log to console for debugging
+                // 只在控制台记录用于调试
                 console.error('[ERROR] Exception during submission:', error);
                 console.error('[ERROR] Error stack:', error.stack);
-                statusDiv.textContent = 'Submission failed: ' + (error.message || 'Unknown error');
-                statusDiv.className = 'form-status error';
             }} finally {{
                 submitBtn.disabled = false;
             }}
