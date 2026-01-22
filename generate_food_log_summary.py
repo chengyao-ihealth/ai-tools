@@ -402,6 +402,827 @@ def convert_height_to_cm(height_value: Optional[float], unit: Optional[str]) -> 
     except (ValueError, TypeError):
         return None
 
+def get_nutrition_info_with_ai(
+    client: MongoClient, 
+    patient_id: str, 
+    database_name: str = "UnifiedCare",
+    openai_api_key: Optional[str] = None,
+    cache_db: Optional[CacheDB] = None,
+    debug: bool = False
+) -> Dict[str, Any]:
+    """
+    Get nutrition-related information using AI to summarize from multiple data sources.
+    使用AI从多个数据源总结获取营养相关信息。
+    
+    Data sources: care notes, assessments, sticky notes, chat message history
+    数据源：care notes, assessments, sticky notes, chat message history
+    
+    Returns:
+        Dict with:
+        - nutrition_diagnoses: Nutrition-related diagnoses (AI summarized)
+        - biggest_medical_problem: Biggest medical problem (AI summarized)
+        - nutrition_behavioral_goals: Nutrition behavioral goals (AI summarized)
+        - nutrition_assessment: Initial nutrition assessment (AI summarized)
+    """
+    # First collect all raw data
+    # 首先收集所有原始数据
+    raw_data = collect_patient_data_sources(client, patient_id, database_name, debug=debug)
+    
+    # Use AI to summarize
+    # 使用AI总结
+    if OpenAI is None:
+        print("[WARN] OpenAI not available, falling back to basic extraction")
+        return get_nutrition_info(client, patient_id, database_name)
+    
+    api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        print("[WARN] OPENAI_API_KEY not found, falling back to basic extraction")
+        return get_nutrition_info(client, patient_id, database_name)
+    
+    # Check cache (use food_log_id=None, image_url=None as cache key)
+    # 检查缓存（使用food_log_id=None, image_url=None作为缓存键）
+    if cache_db:
+        # Use patient_id as a unique identifier for caching
+        # 使用patient_id作为缓存的唯一标识符
+        cached = cache_db.get_ai_summary_cache(food_log_id=f"nutrition_info_{patient_id}", image_url=None, patient_notes=None)
+        if cached:
+            if debug:
+                print(f"[DEBUG] Using cached AI nutrition info summary")
+            return cached
+    
+    # Generate AI summary
+    # 生成AI总结
+    try:
+        summary = generate_nutrition_info_ai_summary(raw_data, api_key, debug=debug)
+        
+        # Save to cache
+        # 保存到缓存
+        if cache_db and summary:
+            cache_db.save_ai_summary_cache(summary, food_log_id=f"nutrition_info_{patient_id}", image_url=None, patient_notes=None)
+        
+        return summary
+    except Exception as e:
+        print(f"[WARN] AI summary failed: {e}, falling back to basic extraction")
+        if debug:
+            import traceback
+            traceback.print_exc()
+        return get_nutrition_info(client, patient_id, database_name)
+
+
+def collect_patient_data_sources(
+    client: MongoClient, 
+    patient_id: str, 
+    database_name: str = "UnifiedCare",
+    debug: bool = False
+) -> Dict[str, Any]:
+    """
+    Collect all relevant data sources for AI summarization.
+    收集所有相关数据源用于AI总结。
+    
+    Returns:
+        Dict with collected data from:
+        - care_notes: All care notes
+        - assessments: Nutrition assessments
+        - sticky_notes: Sticky notes
+        - chat_messages: Chat message history
+        - patient_info: Basic patient info
+    """
+    db = client[database_name]
+    result = {
+        "care_notes": [],
+        "assessments": [],
+        "sticky_notes": [],
+        "chat_messages": [],
+        "patient_info": {}
+    }
+    
+    try:
+        query_id = patient_id
+        try:
+            query_id = ObjectId(patient_id)
+        except Exception:
+            pass
+        
+        # 1. Get care notes
+        # 获取care notes
+        try:
+            care_notes_collection = db["uc_care_notes"]
+            care_notes = list(care_notes_collection.find({
+                "$or": [
+                    {"memberId": query_id},
+                    {"memberId": patient_id},
+                    {"patient_id": query_id},
+                    {"patient_id": patient_id}
+                ]
+            }).sort("createdAt", -1).limit(100))
+            
+            for note in care_notes:
+                note_text = ""
+                for field in ["note", "content", "text", "assessment"]:
+                    if note.get(field):
+                        note_text = str(note[field])
+                        break
+                if note_text:
+                    result["care_notes"].append({
+                        "text": note_text,
+                        "createdAt": str(note.get("createdAt", ""))
+                    })
+        except Exception as e:
+            if debug:
+                print(f"[DEBUG] Error getting care notes: {e}")
+        
+        # 2. Get assessments (from uc_nutritions, uc_monthly_review)
+        # 获取评估（从uc_nutritions, uc_monthly_review）
+        try:
+            # uc_nutritions
+            nutritions_collection = db["uc_nutritions"]
+            nutrition_docs = list(nutritions_collection.find({
+                "$or": [
+                    {"memberId": query_id},
+                    {"memberId": patient_id},
+                    {"patient_id": query_id},
+                    {"patient_id": patient_id}
+                ]
+            }).sort("createdAt", -1).limit(10))
+            
+            for doc in nutrition_docs:
+                for key in ["assessment", "initialAssessment", "baselineAssessment", "summary", "notes"]:
+                    value = doc.get(key)
+                    if value:
+                        result["assessments"].append({
+                            "text": str(value),
+                            "type": "nutrition",
+                            "createdAt": str(doc.get("createdAt", ""))
+                        })
+                        break
+            
+            # uc_monthly_review
+            monthly_review_collection = db["uc_monthly_review"]
+            reviews = list(monthly_review_collection.find({
+                "$or": [
+                    {"memberId": query_id},
+                    {"memberId": patient_id},
+                    {"patient_id": query_id},
+                    {"patient_id": patient_id}
+                ]
+            }).sort("createdAt", 1).limit(10))  # Earliest first for initial assessment
+            
+            for review in reviews:
+                for key in ["assessment", "nutritionAssessment", "initialAssessment", "summary", "notes"]:
+                    value = review.get(key)
+                    if value:
+                        result["assessments"].append({
+                            "text": str(value),
+                            "type": "monthly_review",
+                            "createdAt": str(review.get("createdAt", ""))
+                        })
+                        break
+        except Exception as e:
+            if debug:
+                print(f"[DEBUG] Error getting assessments: {e}")
+        
+        # 3. Get sticky notes (if collection exists)
+        # 获取sticky notes（如果集合存在）
+        try:
+            sticky_notes_collection = db.get_collection("uc_sticky_notes")
+            if sticky_notes_collection:
+                sticky_notes = list(sticky_notes_collection.find({
+                    "$or": [
+                        {"memberId": query_id},
+                        {"memberId": patient_id},
+                        {"patient_id": query_id},
+                        {"patient_id": patient_id}
+                    ]
+                }).sort("createdAt", -1).limit(50))
+                
+                for note in sticky_notes:
+                    note_text = ""
+                    for field in ["note", "content", "text", "message"]:
+                        if note.get(field):
+                            note_text = str(note[field])
+                            break
+                    if note_text:
+                        result["sticky_notes"].append({
+                            "text": note_text,
+                            "createdAt": str(note.get("createdAt", ""))
+                        })
+        except Exception as e:
+            if debug:
+                print(f"[DEBUG] Error getting sticky notes: {e}")
+        
+        # 4. Get chat messages (if collection exists)
+        # 获取chat messages（如果集合存在）
+        try:
+            # Try different possible collection names
+            # 尝试不同的可能集合名称
+            for collection_name in ["uc_chat_messages", "uc_chat", "chat_messages", "messages"]:
+                try:
+                    chat_collection = db[collection_name]
+                    chat_messages = list(chat_collection.find({
+                        "$or": [
+                            {"memberId": query_id},
+                            {"memberId": patient_id},
+                            {"patientId": query_id},
+                            {"patientId": patient_id},
+                            {"patient_id": query_id},
+                            {"patient_id": patient_id}
+                        ]
+                    }).sort("createdAt", -1).limit(100))
+                    
+                    for msg in chat_messages:
+                        msg_text = ""
+                        for field in ["message", "content", "text", "body"]:
+                            if msg.get(field):
+                                msg_text = str(msg[field])
+                                break
+                        if msg_text:
+                            result["chat_messages"].append({
+                                "text": msg_text,
+                                "createdAt": str(msg.get("createdAt", "")),
+                                "sender": str(msg.get("sender", ""))
+                            })
+                    
+                    if result["chat_messages"]:
+                        break  # Found messages, stop trying other collections
+                except Exception:
+                    continue
+        except Exception as e:
+            if debug:
+                print(f"[DEBUG] Error getting chat messages: {e}")
+        
+        # 5. Get basic patient info
+        # 获取基本患者信息
+        try:
+            patients_collection = db["uc_patients"]
+            patient_doc = patients_collection.find_one({"_id": query_id}) or patients_collection.find_one({"_id": patient_id})
+            if patient_doc:
+                result["patient_info"] = {
+                    "diagnoses": patient_doc.get("diagnoses", []),
+                    "healthConditions": patient_doc.get("healthConditions", [])
+                }
+        except Exception as e:
+            if debug:
+                print(f"[DEBUG] Error getting patient info: {e}")
+    
+    except Exception as e:
+        if debug:
+            print(f"[DEBUG] Error collecting data sources: {e}")
+    
+    return result
+
+
+def generate_nutrition_info_ai_summary(
+    raw_data: Dict[str, Any],
+    openai_api_key: str,
+    debug: bool = False
+) -> Dict[str, Any]:
+    """
+    Use AI to summarize nutrition information from collected data sources.
+    使用AI从收集的数据源总结营养信息。
+    """
+    if OpenAI is None:
+        return {}
+    
+    client = OpenAI(api_key=openai_api_key)
+    
+    # Build prompt with all collected data
+    # 构建包含所有收集数据的prompt
+    prompt = f"""You are a clinical nutritionist analyzing patient information from multiple data sources.
+
+PATIENT DATA SOURCES:
+1. Care Notes ({len(raw_data.get('care_notes', []))} notes):
+{chr(10).join([f"- {note.get('text', '')[:500]}" for note in raw_data.get('care_notes', [])[:20]])}
+
+2. Assessments ({len(raw_data.get('assessments', []))} assessments):
+{chr(10).join([f"- [{note.get('type', 'unknown')}] {note.get('text', '')[:500]}" for note in raw_data.get('assessments', [])[:10]])}
+
+3. Sticky Notes ({len(raw_data.get('sticky_notes', []))} notes):
+{chr(10).join([f"- {note.get('text', '')[:500]}" for note in raw_data.get('sticky_notes', [])[:20]])}
+
+4. Chat Messages ({len(raw_data.get('chat_messages', []))} messages):
+{chr(10).join([f"- {note.get('text', '')[:500]}" for note in raw_data.get('chat_messages', [])[:30]])}
+
+5. Patient Diagnoses and Health Conditions:
+- Diagnoses: {raw_data.get('patient_info', {}).get('diagnoses', [])}
+- Health Conditions: {raw_data.get('patient_info', {}).get('healthConditions', [])}
+
+Based on the above information, please provide a concise, structured summary for each of the following 4 items:
+
+1. **Nutrition-Related Diagnoses**: List nutrition-related diagnoses (e.g., diabetes, hypertension, hyperlipidemia, obesity, kidney disease, etc.). Use bullet points or comma-separated list. Be specific and clear.
+
+2. **Primary Medical Problem**: Identify the patient's biggest/primary medical problem currently. State it clearly with brief context if needed.
+
+3. **Nutrition Behavioral Goals**: Extract and list all nutrition behavioral goals from care notes, assessments, sticky notes, and chat messages. Format as structured list with:
+   - Goal name/description
+   - Target value (if mentioned)
+   - Current status/progress (if mentioned)
+   Use bullet points or structured format. Be concise but clear.
+
+4. **Initial Nutrition Assessment**: Summarize key findings from the initial nutrition assessment. Use bullet points for key points. Focus on actionable insights and important observations.
+
+Please format your response as JSON with the following structure:
+{{
+    "nutrition_diagnoses": "concise text (bullet points or comma-separated)",
+    "biggest_medical_problem": "concise text with clear statement",
+    "nutrition_behavioral_goals": "structured text (bullet points or structured format)",
+    "nutrition_assessment": "concise text (bullet points for key findings)"
+}}
+
+Guidelines:
+- Use bullet points (•) or structured format for clarity
+- Be concise - no need for complete sentences, but reasoning must be clear
+- Focus on facts and actionable information
+- Remove redundant information
+- Keep each item under 200 words
+"""
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "You are a clinical nutritionist. Provide concise, structured summaries using bullet points and clear formatting. No need for complete sentences - use brief phrases and structured lists. Be clear and factual."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.3,
+            max_tokens=1200
+        )
+        
+        content = response.choices[0].message.content
+        
+        # Try to parse JSON response
+        # 尝试解析JSON响应
+        import json
+        # Remove markdown code blocks if present
+        # 如果存在，移除markdown代码块
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
+        
+        try:
+            summary = json.loads(content)
+        except json.JSONDecodeError as e:
+            if debug:
+                print(f"[DEBUG] JSON parse error: {e}")
+                print(f"[DEBUG] Content that failed to parse (first 1000 chars): {content[:1000]}")
+            # Try to extract JSON from the text if it's embedded
+            # 如果JSON嵌入在文本中，尝试提取
+            import re
+            # Try to find JSON object in the content
+            # 尝试在内容中找到JSON对象
+            json_match = re.search(r'\{[^{}]*(?:"nutrition_diagnoses"|"biggest_medical_problem"|"nutrition_behavioral_goals"|"nutrition_assessment")[^{}]*\}', content, re.DOTALL)
+            if json_match:
+                try:
+                    summary = json.loads(json_match.group(0))
+                except:
+                    if debug:
+                        print(f"[DEBUG] Failed to parse extracted JSON")
+                    # Fallback: return empty dict, will use basic extraction
+                    # 回退：返回空字典，将使用基本提取
+                    return {}
+            else:
+                if debug:
+                    print(f"[DEBUG] No JSON pattern found in content")
+                return {}
+        
+        # Convert values to strings, handling lists and dicts
+        # 将值转换为字符串，处理列表和字典
+        def format_value(value):
+            if value is None:
+                return None
+            if isinstance(value, str):
+                # If string looks like JSON (starts with [ or {), try to parse it
+                # 如果字符串看起来像JSON（以[或{开头），尝试解析它
+                value_stripped = value.strip()
+                if (value_stripped.startswith('[') or value_stripped.startswith('{')) and not value_stripped.startswith('•'):
+                    try:
+                        parsed = json.loads(value_stripped)
+                        return format_value(parsed)  # Recursively format
+                    except:
+                        pass  # Not valid JSON, return as string
+                return value
+            elif isinstance(value, list):
+                # Convert list to readable format
+                # 将列表转换为可读格式
+                formatted_items = []
+                for item in value:
+                    if isinstance(item, dict):
+                        # Format dict items as structured text
+                        # 将字典项格式化为结构化文本
+                        goal_name = item.get('goal', item.get('name', ''))
+                        target = item.get('target_value', item.get('target', ''))
+                        status = item.get('current_status', item.get('status', ''))
+                        
+                        if goal_name:
+                            parts = [goal_name]
+                            if target:
+                                parts.append(f"Target: {target}")
+                            if status:
+                                parts.append(f"Status: {status}")
+                            formatted_items.append("; ".join(parts))
+                        else:
+                            # Fallback: format all key-value pairs
+                            # 回退：格式化所有键值对
+                            parts = []
+                            for k, v in item.items():
+                                if k not in ['goal', 'name', 'target_value', 'target', 'current_status', 'status']:
+                                    parts.append(f"{k}: {v}")
+                            if parts:
+                                formatted_items.append("; ".join(parts))
+                    else:
+                        formatted_items.append(str(item))
+                return "\n".join([f"• {item}" for item in formatted_items if item])
+            elif isinstance(value, dict):
+                # Convert dict to readable format
+                # 将字典转换为可读格式
+                parts = []
+                for k, v in value.items():
+                    parts.append(f"{k}: {v}")
+                return "; ".join(parts)
+            else:
+                return str(value)
+        
+        return {
+            "nutrition_diagnoses": format_value(summary.get("nutrition_diagnoses")),
+            "biggest_medical_problem": format_value(summary.get("biggest_medical_problem")),
+            "nutrition_behavioral_goals": format_value(summary.get("nutrition_behavioral_goals")),
+            "nutrition_assessment": format_value(summary.get("nutrition_assessment"))
+        }
+    except Exception as e:
+        if debug:
+            print(f"[DEBUG] AI summary generation failed: {e}")
+            import traceback
+            traceback.print_exc()
+        return {}
+
+
+def get_nutrition_info(client: MongoClient, patient_id: str, database_name: str = "UnifiedCare") -> Dict[str, Any]:
+    """
+    Get nutrition-related information for daily summary display (basic extraction without AI).
+    获取用于每日总结显示的营养相关信息（基本提取，不使用AI）。
+    
+    Returns:
+        Dict with:
+        - nutrition_diagnoses: Nutrition-related diagnoses
+        - biggest_medical_problem: Biggest medical problem
+        - nutrition_behavioral_goals: Nutrition behavioral goals from care notes
+        - nutrition_assessment: Initial nutrition assessment
+    """
+    db = client[database_name]
+    result = {
+        "nutrition_diagnoses": None,
+        "biggest_medical_problem": None,
+        "nutrition_behavioral_goals": None,
+        "nutrition_assessment": None
+    }
+    
+    try:
+        # Convert patient_id to ObjectId if valid
+        query_id = patient_id
+        try:
+            query_id = ObjectId(patient_id)
+        except Exception:
+            pass
+        
+        # 1. Get nutrition-related diagnoses and biggest medical problem from uc_patients
+        patients_collection = db["uc_patients"]
+        patient_doc = patients_collection.find_one({"_id": query_id}) or patients_collection.find_one({"_id": patient_id})
+        
+        if patient_doc:
+            # Get all diagnoses
+            diagnoses = patient_doc.get("diagnoses", [])
+            health_conditions = patient_doc.get("healthConditions", [])
+            
+            # Nutrition-related keywords (including common medical abbreviations)
+            # 营养相关关键词（包括常见医学缩写）
+            nutrition_keywords = [
+                # Diabetes / 糖尿病
+                "diabetes", "diabetic", "prediabetes", "dm", "dm1", "dm2", "t1d", "t2d",
+                # Obesity / 肥胖
+                "obesity", "overweight", "bmi",
+                # Hypertension / 高血压
+                "hypertension", "htn", "high blood pressure", "hbp",
+                # Hyperlipidemia / 高血脂
+                "hyperlipidemia", "cholesterol", "hld", "dyslipidemia", "high cholesterol",
+                # Cardiovascular / 心血管
+                "cvd", "cardiovascular", "heart disease", "cad", "coronary",
+                # Kidney / 肾脏
+                "kidney", "renal", "ckd", "chronic kidney", "nephropathy",
+                # Nutrition / 营养
+                "nutrition", "diet", "dietary", "metabolic", "metabolism"
+            ]
+            
+            # Filter nutrition-related diagnoses
+            nutrition_diag_list = []
+            if diagnoses:
+                diag_mapping = diagnoses_mapping()
+                for diag in diagnoses:
+                    if diag:
+                        mapped_diag = diag_mapping.get(diag, diag)
+                        diag_lower = str(mapped_diag).lower()
+                        if any(keyword in diag_lower for keyword in nutrition_keywords):
+                            nutrition_diag_list.append(mapped_diag)
+            
+            if nutrition_diag_list:
+                result["nutrition_diagnoses"] = ", ".join(nutrition_diag_list)
+            
+            # Get all medical problems (from healthConditions and diagnoses)
+            # 获取所有医疗问题（从healthConditions和diagnoses）
+            all_problems = []
+            
+            # Add health conditions first
+            # 先添加health conditions
+            if health_conditions:
+                for item in health_conditions:
+                    if isinstance(item, dict):
+                        condition = item.get("condition")
+                        if condition:
+                            condition_str = str(condition).strip()
+                            if condition_str and condition_str not in all_problems:
+                                all_problems.append(condition_str)
+                    elif isinstance(item, str):
+                        item_str = item.strip()
+                        if item_str and item_str not in all_problems:
+                            all_problems.append(item_str)
+            
+            # Add diagnoses (avoid duplicates)
+            # 添加诊断（避免重复）
+            if diagnoses:
+                diag_mapping = diagnoses_mapping()
+                for diag in diagnoses:
+                    if diag:
+                        mapped_diag = diag_mapping.get(diag, diag)
+                        mapped_diag_str = str(mapped_diag).strip()
+                        if mapped_diag_str and mapped_diag_str not in all_problems:
+                            all_problems.append(mapped_diag_str)
+            
+            # Join all problems with comma
+            # 用逗号连接所有问题
+            if all_problems:
+                result["biggest_medical_problem"] = ", ".join(all_problems)
+        
+        # 2. Get nutrition behavioral goals from uc_behavior_goals or care notes
+        # Try uc_behavior_goals first
+        try:
+            behavior_goals_collection = db["uc_behavior_goals"]
+            goals_doc = behavior_goals_collection.find_one({"memberId": query_id}) or \
+                       behavior_goals_collection.find_one({"memberId": patient_id}) or \
+                       behavior_goals_collection.find_one({"patient_id": query_id}) or \
+                       behavior_goals_collection.find_one({"patient_id": patient_id})
+            
+            if goals_doc:
+                # Extract nutrition-related goals
+                goals_text = []
+                for key in ["goal", "goals", "nutritionGoal", "nutrition_goal", "behavioralGoal", "behavioral_goal"]:
+                    value = goals_doc.get(key)
+                    if value:
+                        if isinstance(value, list):
+                            goals_text.extend([str(g) for g in value])
+                        else:
+                            goals_text.append(str(value))
+                
+                if goals_text:
+                    result["nutrition_behavioral_goals"] = "; ".join(goals_text[:3])  # Limit to 3
+        except Exception as e:
+            print(f"[DEBUG] Error querying uc_behavior_goals: {e}")
+        
+        # If no goals from uc_behavior_goals, try care notes
+        if not result["nutrition_behavioral_goals"]:
+            try:
+                care_notes_collection = db["uc_care_notes"]
+                # Get all care notes for this patient
+                notes = list(care_notes_collection.find({
+                    "$or": [
+                        {"memberId": query_id},
+                        {"memberId": patient_id},
+                        {"patient_id": query_id},
+                        {"patient_id": patient_id}
+                    ]
+                }).sort("createdAt", -1).limit(50))
+                
+                # Search for nutrition behavioral goals in notes
+                goal_keywords = ["nutrition", "diet", "eating", "food", "meal", "behavior", "goal"]
+                goal_texts = []
+                
+                for note in notes:
+                    note_text = ""
+                    for field in ["note", "content", "text", "assessment"]:
+                        if note.get(field):
+                            note_text = str(note[field]).lower()
+                            break
+                    
+                    if note_text and any(keyword in note_text for keyword in goal_keywords):
+                        # Extract relevant sentences
+                        sentences = note_text.split(".")
+                        for sent in sentences:
+                            if any(keyword in sent for keyword in goal_keywords):
+                                goal_texts.append(sent.strip()[:100])  # Limit length
+                                if len(goal_texts) >= 3:
+                                    break
+                    
+                    if len(goal_texts) >= 3:
+                        break
+                
+                if goal_texts:
+                    result["nutrition_behavioral_goals"] = "; ".join(goal_texts)
+            except Exception as e:
+                print(f"[DEBUG] Error querying care notes for goals: {e}")
+        
+        # 3. Get initial nutrition assessment from uc_nutritions or uc_monthly_review
+        # Try uc_nutritions first
+        try:
+            nutritions_collection = db["uc_nutritions"]
+            nutrition_doc = nutritions_collection.find_one({"memberId": query_id}) or \
+                          nutritions_collection.find_one({"memberId": patient_id}) or \
+                          nutritions_collection.find_one({"patient_id": query_id}) or \
+                          nutritions_collection.find_one({"patient_id": patient_id})
+            
+            if nutrition_doc:
+                # Extract assessment
+                for key in ["assessment", "initialAssessment", "baselineAssessment", "summary", "notes"]:
+                    value = nutrition_doc.get(key)
+                    if value:
+                        result["nutrition_assessment"] = str(value)[:300]  # Limit length
+                        break
+        except Exception as e:
+            print(f"[DEBUG] Error querying uc_nutritions: {e}")
+        
+        # If no assessment from uc_nutritions, try uc_monthly_review
+        if not result["nutrition_assessment"]:
+            try:
+                monthly_review_collection = db["uc_monthly_review"]
+                # Get earliest review (initial assessment)
+                reviews = list(monthly_review_collection.find({
+                    "$or": [
+                        {"memberId": query_id},
+                        {"memberId": patient_id},
+                        {"patient_id": query_id},
+                        {"patient_id": patient_id}
+                    ]
+                }).sort("createdAt", 1).limit(1))  # Earliest first
+                
+                if reviews:
+                    review = reviews[0]
+                    for key in ["assessment", "nutritionAssessment", "initialAssessment", "summary", "notes"]:
+                        value = review.get(key)
+                        if value:
+                            result["nutrition_assessment"] = str(value)[:300]
+                            break
+            except Exception as e:
+                print(f"[DEBUG] Error querying uc_monthly_review: {e}")
+    
+    except Exception as e:
+        print(f"[WARN] Error getting nutrition info: {e}")
+    
+    return result
+
+
+def format_text_with_line_breaks(text: str) -> str:
+    """
+    Format text with proper line breaks for better readability.
+    格式化文本，使用适当的换行以提高可读性。
+    
+    Handles bullet points, double bullets, and ensures proper spacing.
+    处理要点、双要点，并确保适当的间距。
+    """
+    if not text or not text.strip():
+        return ""
+    
+    text = text.strip()
+    
+    # Replace double bullets with single / 将双要点替换为单要点
+    text = text.replace('• •', '•')
+    text = text.replace('•\n•', '•')
+    
+    # Split by bullet points / 按要点分割
+    if '•' in text:
+        parts = text.split('•')
+        formatted_parts = []
+        for part in parts:
+            part = part.strip()
+            if part:
+                # Remove leading/trailing spaces and format
+                # 移除前导/尾随空格并格式化
+                formatted_parts.append(f'<div style="margin: 4px 0; padding-left: 12px; line-height: 1.6;">• {html.escape(part)}</div>')
+        if formatted_parts:
+            return ''.join(formatted_parts)
+    
+    # If no bullets, check for other separators / 如果没有要点，检查其他分隔符
+    # Check for patterns like "• " at start of lines
+    # 检查行首的 "• " 模式
+    lines = text.split('\n')
+    formatted_lines = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        # Check if line starts with bullet or is a list item
+        # 检查行是否以要点开头或是列表项
+        if line.startswith('•'):
+            formatted_lines.append(f'<div style="margin: 4px 0; padding-left: 12px; line-height: 1.6;">{html.escape(line)}</div>')
+        elif line.startswith('-'):
+            formatted_lines.append(f'<div style="margin: 4px 0; padding-left: 12px; line-height: 1.6;">{html.escape(line)}</div>')
+        else:
+            formatted_lines.append(f'<div style="margin: 4px 0; padding-left: 12px; line-height: 1.6;">{html.escape(line)}</div>')
+    
+    if formatted_lines:
+        return ''.join(formatted_lines)
+    
+    # Fallback: just escape and preserve line breaks / 回退：仅转义并保留换行
+    return html.escape(text).replace('\n', '<br>')
+
+
+def format_nutrition_goals(goals_text: str, language: str = 'zh') -> str:
+    """
+    Format nutrition behavioral goals text into a structured, readable format.
+    将营养行为目标文本格式化为结构化、易读的格式。
+    
+    Args:
+        goals_text: Raw goals text / 原始目标文本
+        language: Language code / 语言代码
+        
+    Returns:
+        Formatted HTML string / 格式化的HTML字符串
+    """
+    if not goals_text or not goals_text.strip():
+        return ""
+    
+    import re
+    
+    # Clean up the text - remove existing bullet points to avoid double bullets
+    # 清理文本 - 移除现有的要点以避免双要点
+    text = goals_text.strip()
+    
+    # Remove all existing bullet points (•, -, *, etc.) and clean up
+    # 移除所有现有的要点（•, -, *, 等）并清理
+    text = re.sub(r'^[\s•\-\*]+\s*', '', text, flags=re.MULTILINE)  # Remove leading bullets
+    text = re.sub(r'\s*[\s•\-\*]+\s*', ' ', text)  # Replace multiple bullets/spaces with single space
+    
+    # Split by bullet points, semicolons, or newlines
+    # 按要点、分号或换行符分割
+    parts = []
+    
+    # First check if text contains bullet points (already formatted by AI)
+    # 首先检查文本是否包含要点（已由AI格式化）
+    if '•' in text:
+        # Split by bullet points
+        parts = [p.strip() for p in text.split('•') if p.strip()]
+    elif ';' in text:
+        # Split by semicolons
+        parts = [p.strip() for p in text.split(';') if p.strip()]
+    elif '\n' in text:
+        # Split by newlines
+        parts = [p.strip() for p in text.split('\n') if p.strip()]
+    else:
+        parts = [text]
+    
+    formatted_parts = []
+    
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        
+        # Remove any remaining leading/trailing bullets or spaces
+        # 移除任何剩余的前导/尾随要点或空格
+        part = re.sub(r'^[\s•\-\*]+', '', part).strip()
+        part = re.sub(r'[\s•\-\*]+$', '', part).strip()
+        
+        if not part:
+            continue
+        
+        # Format based on content
+        # 根据内容格式化
+        if ':' in part:
+            # Has label:value format
+            # 有标签:值格式
+            colon_parts = part.split(':', 1)
+            if len(colon_parts) == 2:
+                label = colon_parts[0].strip()
+                value = colon_parts[1].strip()
+                formatted_parts.append(
+                    f'<div style="margin: 4px 0; padding-left: 12px; line-height: 1.6;">'
+                    f'• <strong>{html.escape(label)}:</strong> {html.escape(value)}</div>'
+                )
+            else:
+                formatted_parts.append(
+                    f'<div style="margin: 4px 0; padding-left: 12px; line-height: 1.6;">• {html.escape(part)}</div>'
+                )
+        else:
+            # Simple text
+            # 简单文本
+            formatted_parts.append(
+                f'<div style="margin: 4px 0; padding-left: 12px; line-height: 1.6;">• {html.escape(part)}</div>'
+            )
+    
+    if formatted_parts:
+        return '<div style="margin-top: 4px;">' + ''.join(formatted_parts) + '</div>'
+    else:
+        # Fallback: use format_text_with_line_breaks
+        # 回退：使用 format_text_with_line_breaks
+        return format_text_with_line_breaks(goals_text)
+
+
 def get_patient_info(client: MongoClient, patient_id: str, database_name: str = "UnifiedCare") -> Dict[str, Any]:
     """
     Get patient background information from database using the same structure as ai-agent-service.
@@ -545,6 +1366,28 @@ def get_patient_info(client: MongoClient, patient_id: str, database_name: str = 
             control_level = doc.get("controlLevel")
             if control_level:
                 patient_info["control_level"] = str(control_level)
+        
+            # Get nutrition-related information for daily summary (with AI summarization)
+            # 获取用于每日总结的营养相关信息（使用AI总结）
+            # Try AI summarization first, fall back to basic extraction if fails
+            # 先尝试AI总结，如果失败则回退到基本提取
+            try:
+                cache_db_instance = CacheDB(db_path=Path("./cache.db")) if CacheDB else None
+                openai_key = os.getenv("OPENAI_API_KEY")
+                if openai_key and OpenAI:
+                    nutrition_info = get_nutrition_info_with_ai(
+                        client, patient_id, database_name,
+                        openai_api_key=openai_key,
+                        cache_db=cache_db_instance,
+                        debug=False
+                    )
+                else:
+                    nutrition_info = get_nutrition_info(client, patient_id, database_name)
+            except Exception as e:
+                print(f"[WARN] AI nutrition info summarization failed, using basic extraction: {e}")
+                nutrition_info = get_nutrition_info(client, patient_id, database_name)
+            
+            patient_info.update(nutrition_info)
             
             # Print debug info
             print(f"[DEBUG] Extracted patient info fields: {list(patient_info.keys())}")
@@ -1439,29 +2282,15 @@ def generate_html_summary(
     print(f"[DEBUG] generate_html_summary: patient_info keys = {list(patient_info.keys())}")
     print(f"[DEBUG] generate_html_summary: patient_info = {patient_info}")
     
-    # Patient info section
-    # Always show at least patient ID
+    # Patient info section - Display detailed patient info first, then 4 key items
+    # 患者信息部分 - 先显示详细患者信息，再显示4项关键信息
     patient_info_html = f"""
     <div class="patient-info">
         <h2>{t['patient_info']}</h2>
         <ul class="patient-details">
     """
     
-    # Always show patient ID
-    patient_id_display = patient_info.get("patient_id") or patient_id
-    patient_id_label = "患者ID" if language == 'zh' else "Patient ID"
-    patient_info_html += f'<li><strong>{patient_id_label}:</strong> {html.escape(str(patient_id_display))}</li>'
-    
-    # Show name if available
-    if patient_info.get("name"):
-        name_label = "姓名" if language == 'zh' else "Name"
-        patient_info_html += f'<li><strong>{name_label}:</strong> {html.escape(str(patient_info["name"]))}</li>'
-    
-    # Show individual fields (always show all extracted fields)
-    # 显示各个字段（总是显示所有提取到的字段）
-    # Use more lenient checks to ensure data is displayed
-    # 使用更宽松的检查条件确保数据显示
-    
+    # Detailed patient information / 详细患者信息（在前）
     # Age
     age_val = patient_info.get("age")
     if age_val is not None and age_val != "":
@@ -1500,12 +2329,7 @@ def generate_html_summary(
     if bmi_val is not None and bmi_val != "":
         patient_info_html += f'<li><strong>BMI:</strong> {bmi_val}</li>'
     
-    # Medical history (from healthConditions)
-    medical_history = patient_info.get("medical_history")
-    if medical_history and str(medical_history).strip():
-        patient_info_html += f'<li><strong>{t["medical_history"]}:</strong> {html.escape(str(medical_history))}</li>'
-    
-    # Diagnoses (from diagnoses_display)
+    # Diagnoses (from diagnoses_display) - Keep this
     diagnoses = patient_info.get("diagnoses")
     if diagnoses and str(diagnoses).strip():
         diagnoses_label = "诊断" if language == 'zh' else "Diagnoses"
@@ -1531,9 +2355,43 @@ def generate_html_summary(
     if medications and str(medications).strip():
         patient_info_html += f'<li><strong>{t["medications"]}:</strong> {html.escape(str(medications))}</li>'
     
-    # If no additional info found, show a message
-    if len(patient_info) == 1:  # Only patient_id
-        no_info_msg = "暂无其他患者信息" if language == 'zh' else "No additional patient information available"
+    # Check if we have detailed info
+    has_detailed_info = any([age_val, weight_val, height_val, bmi_val, diagnoses, ethnicity, region, exercise, medications])
+    
+    # 3 key items / 3项关键信息（在后）
+    biggest_problem = patient_info.get("biggest_medical_problem")
+    nutrition_goals = patient_info.get("nutrition_behavioral_goals")
+    nutrition_assessment = patient_info.get("nutrition_assessment")
+    # 1. Biggest medical problem / 最大医疗问题
+    if biggest_problem and str(biggest_problem).strip():
+        label = "主要医疗问题" if language == 'zh' else "Primary Medical Problem"
+        problem_text = str(biggest_problem).strip()
+        # Format with proper line breaks / 格式化，使用适当的换行
+        formatted_problem = format_text_with_line_breaks(problem_text)
+        patient_info_html += f'<li><strong>{label}:</strong><br>{formatted_problem}</li>'
+    
+    # 2. Nutrition behavioral goals / 营养行为目标
+    if nutrition_goals and str(nutrition_goals).strip():
+        label = "营养行为目标" if language == 'zh' else "Nutrition Behavioral Goals"
+        goals_text = str(nutrition_goals).strip()
+        
+        # Format goals in a structured way / 格式化目标为结构化显示
+        formatted_goals = format_nutrition_goals(goals_text, language)
+        
+        patient_info_html += f'<li><strong>{label}:</strong><br>{formatted_goals}</li>'
+    
+    # 3. Initial nutrition assessment / 初始营养评估
+    if nutrition_assessment and str(nutrition_assessment).strip():
+        label = "初始营养评估" if language == 'zh' else "Initial Nutrition Assessment"
+        assessment_text = str(nutrition_assessment).strip()
+        # Format with proper line breaks, no truncation / 格式化，使用适当的换行，不截断
+        formatted_assessment = format_text_with_line_breaks(assessment_text)
+        patient_info_html += f'<li><strong>{label}:</strong><br>{formatted_assessment}</li>'
+    
+    # If no info found, show a message
+    has_key_items = any([biggest_problem, nutrition_goals, nutrition_assessment])
+    if not has_detailed_info and not has_key_items:
+        no_info_msg = "暂无患者信息" if language == 'zh' else "No patient information available"
         patient_info_html += f'<li style="color: #999; font-style: italic;">{no_info_msg}</li>'
     
     patient_info_html += """
