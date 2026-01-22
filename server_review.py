@@ -278,9 +278,22 @@ def _build_collapsible_raw_data(raw_data_info: dict, foodlog_id: str, additional
     if not raw_data_info and not additional_fields:
         return ""
     
-    # Build content from main field
-    # 从主字段构建内容
+    # Build content - show additional fields first, then AI Identify Raw Data
+    # 构建内容 - 先显示额外字段，然后显示 AI Identify Raw Data
     content_parts = []
+    
+    # Add additional fields first (FoodLogLabels, MicroAction, ActionFamily, BestAnchor)
+    # 先添加额外字段（FoodLogLabels, MicroAction, ActionFamily, BestAnchor）
+    if additional_fields:
+        for field_label, field_value in additional_fields:
+            if field_value:
+                # field_value is already formatted, just escape HTML
+                # field_value 已经格式化，只需转义HTML
+                safe_field_value = html_module.escape(str(field_value)).replace("\n", "<br/>")
+                content_parts.append(f"<div class='ai-raw-data-field'><strong>{html_module.escape(field_label)}:</strong><div class='ai-raw-data-value'>{safe_field_value}</div></div>")
+    
+    # Add main field (AI Identify Raw Data) after additional fields
+    # 在额外字段之后添加主字段（AI Identify Raw Data）
     if raw_data_info:
         label = raw_data_info['label']
         value = raw_data_info['value']
@@ -296,35 +309,21 @@ def _build_collapsible_raw_data(raw_data_info: dict, foodlog_id: str, additional
         if safe_value:
             content_parts.append(f"<div class='ai-raw-data-field'><strong>{html_module.escape(label)}:</strong><div class='ai-raw-data-value'>{safe_value}</div></div>")
     
-    # Add additional fields
-    # 添加额外字段
-    if additional_fields:
-        for field_label, field_value in additional_fields:
-            if field_value:
-                # field_value is already formatted, just escape HTML
-                # field_value 已经格式化，只需转义HTML
-                safe_field_value = html_module.escape(str(field_value)).replace("\n", "<br/>")
-                content_parts.append(f"<div class='ai-raw-data-field'><strong>{html_module.escape(field_label)}:</strong><div class='ai-raw-data-value'>{safe_field_value}</div></div>")
-    
     if not content_parts:
         return ""
     
     unique_id = f"raw-data-{html_module.escape(foodlog_id)}"
     combined_content = "".join(content_parts)
     
-    return f"""
-    <div class="ai-raw-data-container">
+    return f"""<div class="ai-raw-data-container">
         <button type="button" class="ai-raw-data-toggle" onclick="toggleRawData('{unique_id}')">
             <span class="toggle-icon collapsed" id="toggle-icon-{unique_id}">▼</span>
-            AI Identify Raw Data
+            AI Identified Data
         </button>
         <div class="ai-raw-data-content" id="{unique_id}">
-            <div class="ai-raw-data-scroll">
-                {combined_content}
-            </div>
+            <div class="ai-raw-data-scroll">{combined_content}</div>
         </div>
-    </div>
-    """
+    </div>"""
 
 
 def build_card_html(row, images_dir: Path, display_columns: List[str], row_idx: Any = None) -> str:
@@ -377,6 +376,13 @@ def build_card_html(row, images_dir: Path, display_columns: List[str], row_idx: 
             continue
         value = row[col] if col in row.index else ""
         formatted_value = format_field_value(value, col)
+        
+        # Special handling for FoodLogLabels, MicroAction and ActionFamily - show "none" if empty
+        # 特殊处理 FoodLogLabels, MicroAction 和 ActionFamily - 如果为空则显示 "none"
+        if col in {'FoodLogLabels', 'MicroAction', 'ActionFamily'}:
+            if not formatted_value:
+                formatted_value = "none"
+        
         if not formatted_value:
             continue
         
@@ -399,19 +405,37 @@ def build_card_html(row, images_dir: Path, display_columns: List[str], row_idx: 
                 # Add AI fields directly to other_fields (no blue box)
                 # 直接将AI字段添加到other_fields（不使用蓝框）
                 other_fields.append(para(formatted_label, formatted_value, escape_html=not allow_html))
+        elif col == 'FoodLogLabels':
+            # Add FoodLogLabels to collapsible raw data section (before MicroAction)
+            # 将 FoodLogLabels 添加到可折叠的原始数据部分（在 MicroAction 之前）
+            formatted_label = format_field_name(col)
+            additional_raw_data_fields.append((formatted_label, formatted_value))
         elif col in {'MicroAction', 'ActionFamily', 'BestAnchor'}:
             # Collect these fields to include in collapsible raw data section
             # 收集这些字段以包含在可折叠的原始数据部分
             formatted_label = format_field_name(col)
             additional_raw_data_fields.append((formatted_label, formatted_value))
         elif col in ai_content_fields:
-            # Add FoodLogLabels directly to other_fields (no blue box)
-            # 直接将FoodLogLabels添加到other_fields（不使用蓝框）
+            # Other fields in ai_content_fields (shouldn't happen now, but keep for safety)
+            # ai_content_fields 中的其他字段（现在不应该发生，但保留作为安全措施）
             allow_html = col.lower() in ['ingredients']
             other_fields.append(para(col, formatted_value, escape_html=not allow_html))
         else:
             allow_html = col.lower() in ['ingredients']
             other_fields.append(para(col, formatted_value, escape_html=not allow_html))
+    
+    # Sort additional_raw_data_fields to ensure correct order: FoodLogLabels, then MicroAction, ActionFamily, BestAnchor
+    # 对 additional_raw_data_fields 进行排序以确保正确顺序：FoodLogLabels，然后是 MicroAction, ActionFamily, BestAnchor
+    # Use formatted field names for sorting (format_field_name converts "FoodLogLabels" -> "Food Log Labels")
+    # 使用格式化后的字段名进行排序（format_field_name 将 "FoodLogLabels" 转换为 "Food Log Labels"）
+    field_order = {
+        format_field_name('FoodLogLabels'): 0,
+        format_field_name('MicroAction'): 1,
+        format_field_name('ActionFamily'): 2,
+        format_field_name('BestAnchor'): 3
+    }
+    if additional_raw_data_fields:
+        additional_raw_data_fields.sort(key=lambda x: field_order.get(x[0], 999))
     
     # Add AI Identify Raw Data as collapsible field (if exists), including additional fields
     # 添加AI Identify Raw Data作为可折叠字段（如果存在），包括额外字段
@@ -457,28 +481,42 @@ def build_card_html(row, images_dir: Path, display_columns: List[str], row_idx: 
                         # 检查反馈是否为问卷格式（JSON）
                         try:
                             questionnaire_data = json.loads(feedback_text) if isinstance(feedback_text, str) else feedback_text
-                            if isinstance(questionnaire_data, dict) and 'q1_clinically_appropriate' in questionnaire_data:
+                            if isinstance(questionnaire_data, dict) and ('q1_most_important' in questionnaire_data or 'q1_clinically_appropriate' in questionnaire_data):
                                 # Format questionnaire data
                                 # 格式化问卷数据
-                                questions = [
-                                    ("Clinically appropriate and safe", questionnaire_data.get('q1_clinically_appropriate', '')),
-                                    ("Main message focuses on most important thing", questionnaire_data.get('q2_main_message', '')),
-                                    ("Reasonably reflects what's on plate/log", questionnaire_data.get('q3_reflects_plate', '')),
-                                    ("Suggested action makes sense", questionnaire_data.get('q4_action_makes_sense', '')),
-                                    ("Tone is supportive and patient-friendly", questionnaire_data.get('q5_tone', '')),
-                                    ("Comfortable sending to patients", questionnaire_data.get('q6_comfortable_sending', ''))
-                                ]
+                                # Support both old and new format for backward compatibility
+                                if 'q1_most_important' in questionnaire_data:
+                                    # New format
+                                    questions = [
+                                        ("The insight correctly identifies and focuses on the most important thing about this meal", questionnaire_data.get('q1_most_important', '')),
+                                        ("The suggested action (if any) makes sense as a secondary step", questionnaire_data.get('q2_action_makes_sense', '')),
+                                        ("Clinically appropriate, safe, patient-friendly and comfortable sending to a patient", questionnaire_data.get('q3_clinically_appropriate', ''))
+                                    ]
+                                else:
+                                    # Old format (backward compatibility)
+                                    questions = [
+                                        ("Clinically appropriate and safe", questionnaire_data.get('q1_clinically_appropriate', '')),
+                                        ("Main message focuses on most important thing", questionnaire_data.get('q2_main_message', '')),
+                                        ("Reasonably reflects what's on plate/log", questionnaire_data.get('q3_reflects_plate', '')),
+                                        ("Suggested action makes sense", questionnaire_data.get('q4_action_makes_sense', '')),
+                                        ("Tone is supportive and patient-friendly", questionnaire_data.get('q5_tone', '')),
+                                        ("Comfortable sending to patients", questionnaire_data.get('q6_comfortable_sending', ''))
+                                    ]
                                 
                                 questionnaire_html = '<div class="questionnaire-results">'
                                 for q_text, q_value in questions:
                                     if q_value:
                                         questionnaire_html += f'<div class="question-result"><strong>{html_module.escape(q_text)}:</strong> {html_module.escape(str(q_value))}</div>'
                                 
-                                if questionnaire_data.get('q7_what_worked'):
-                                    questionnaire_html += f'<div class="question-result"><strong>What worked well:</strong> {html_module.escape(questionnaire_data["q7_what_worked"]).replace(chr(10), "<br/>")}</div>'
+                                # Support both old and new format for text fields
+                                what_worked = questionnaire_data.get('q4_what_worked') or questionnaire_data.get('q7_what_worked')
+                                what_felt_off = questionnaire_data.get('q5_what_felt_off') or questionnaire_data.get('q8_what_felt_off')
                                 
-                                if questionnaire_data.get('q8_what_felt_off'):
-                                    questionnaire_html += f'<div class="question-result"><strong>What felt off or risky:</strong> {html_module.escape(questionnaire_data["q8_what_felt_off"]).replace(chr(10), "<br/>")}</div>'
+                                if what_worked:
+                                    questionnaire_html += f'<div class="question-result"><strong>What worked well:</strong> {html_module.escape(what_worked).replace(chr(10), "<br/>")}</div>'
+                                
+                                if what_felt_off:
+                                    questionnaire_html += f'<div class="question-result"><strong>What felt off or risky:</strong> {html_module.escape(what_felt_off).replace(chr(10), "<br/>")}</div>'
                                 
                                 questionnaire_html += '</div>'
                                 escaped_feedback = questionnaire_html
@@ -517,94 +555,54 @@ def build_card_html(row, images_dir: Path, display_columns: List[str], row_idx: 
                 
                 <div class="form-group">
                     <div class="question-item">
-                        <div class="question-text">This insight is clinically appropriate and safe for a patient to receive.<span class="required-asterisk">*</span></div>
+                        <div class="question-text">The insight correctly identifies and focuses on the most important thing about this meal.<span class="required-asterisk">*</span></div>
                         <div class="question-hint">Rate: 1–5 (Strongly disagree → Strongly agree)</div>
                         <div class="rating-group">
-                            <label><input type="radio" name="q1_clinically_appropriate" value="1" required> 1</label>
-                            <label><input type="radio" name="q1_clinically_appropriate" value="2" required> 2</label>
-                            <label><input type="radio" name="q1_clinically_appropriate" value="3" required> 3</label>
-                            <label><input type="radio" name="q1_clinically_appropriate" value="4" required> 4</label>
-                            <label><input type="radio" name="q1_clinically_appropriate" value="5" required> 5</label>
+                            <label><input type="radio" name="q1_most_important" value="1" required> 1</label>
+                            <label><input type="radio" name="q1_most_important" value="2" required> 2</label>
+                            <label><input type="radio" name="q1_most_important" value="3" required> 3</label>
+                            <label><input type="radio" name="q1_most_important" value="4" required> 4</label>
+                            <label><input type="radio" name="q1_most_important" value="5" required> 5</label>
                         </div>
                     </div>
                 </div>
                 
                 <div class="form-group">
                     <div class="question-item">
-                        <div class="question-text">The main message focuses on the most important thing about this meal.<span class="required-asterisk">*</span></div>
+                        <div class="question-text">The suggested action (if any) makes sense as a secondary step for this meal and its timing.<span class="required-asterisk">*</span></div>
                         <div class="question-hint">Rate: 1–5 (Strongly disagree → Strongly agree)</div>
                         <div class="rating-group">
-                            <label><input type="radio" name="q2_main_message" value="1" required> 1</label>
-                            <label><input type="radio" name="q2_main_message" value="2" required> 2</label>
-                            <label><input type="radio" name="q2_main_message" value="3" required> 3</label>
-                            <label><input type="radio" name="q2_main_message" value="4" required> 4</label>
-                            <label><input type="radio" name="q2_main_message" value="5" required> 5</label>
+                            <label><input type="radio" name="q2_action_makes_sense" value="1" required> 1</label>
+                            <label><input type="radio" name="q2_action_makes_sense" value="2" required> 2</label>
+                            <label><input type="radio" name="q2_action_makes_sense" value="3" required> 3</label>
+                            <label><input type="radio" name="q2_action_makes_sense" value="4" required> 4</label>
+                            <label><input type="radio" name="q2_action_makes_sense" value="5" required> 5</label>
                         </div>
                     </div>
                 </div>
                 
                 <div class="form-group">
                     <div class="question-item">
-                        <div class="question-text">The insight reasonably reflects what's on the plate or in the log.<span class="required-asterisk">*</span></div>
+                        <div class="question-text">This insight is clinically appropriate, safe, patient-friendly and something I would feel comfortable sending to a patient.<span class="required-asterisk">*</span></div>
                         <div class="question-hint">Rate: 1–5 (Strongly disagree → Strongly agree)</div>
                         <div class="rating-group">
-                            <label><input type="radio" name="q3_reflects_plate" value="1" required> 1</label>
-                            <label><input type="radio" name="q3_reflects_plate" value="2" required> 2</label>
-                            <label><input type="radio" name="q3_reflects_plate" value="3" required> 3</label>
-                            <label><input type="radio" name="q3_reflects_plate" value="4" required> 4</label>
-                            <label><input type="radio" name="q3_reflects_plate" value="5" required> 5</label>
+                            <label><input type="radio" name="q3_clinically_appropriate" value="1" required> 1</label>
+                            <label><input type="radio" name="q3_clinically_appropriate" value="2" required> 2</label>
+                            <label><input type="radio" name="q3_clinically_appropriate" value="3" required> 3</label>
+                            <label><input type="radio" name="q3_clinically_appropriate" value="4" required> 4</label>
+                            <label><input type="radio" name="q3_clinically_appropriate" value="5" required> 5</label>
                         </div>
                     </div>
                 </div>
                 
                 <div class="form-group">
-                    <div class="question-item">
-                        <div class="question-text">The suggested action makes sense as a secondary step for this meal and timing. (N/A if no action)<span class="required-asterisk">*</span></div>
-                        <div class="question-hint">Rate: 1–5 (Strongly disagree → Strongly agree) or N/A</div>
-                        <div class="rating-group">
-                            <label><input type="radio" name="q4_action_makes_sense" value="1" required> 1</label>
-                            <label><input type="radio" name="q4_action_makes_sense" value="2" required> 2</label>
-                            <label><input type="radio" name="q4_action_makes_sense" value="3" required> 3</label>
-                            <label><input type="radio" name="q4_action_makes_sense" value="4" required> 4</label>
-                            <label><input type="radio" name="q4_action_makes_sense" value="5" required> 5</label>
-                            <label><input type="radio" name="q4_action_makes_sense" value="N/A" required> N/A</label>
-                        </div>
-                    </div>
+                    <label for="q4_what_worked-{html_module.escape(foodlog_id)}">What worked well here? (optional)</label>
+                    <textarea id="q4_what_worked-{html_module.escape(foodlog_id)}" name="q4_what_worked" class="form-textarea" rows="2" placeholder="Short text"></textarea>
                 </div>
                 
                 <div class="form-group">
-                    <div class="question-item">
-                        <div class="question-text">The tone is supportive, non-judgmental, and patient-friendly.<span class="required-asterisk">*</span></div>
-                        <div class="question-hint">Rate: 1–5 (Strongly disagree → Strongly agree)</div>
-                        <div class="rating-group">
-                            <label><input type="radio" name="q5_tone" value="1" required> 1</label>
-                            <label><input type="radio" name="q5_tone" value="2" required> 2</label>
-                            <label><input type="radio" name="q5_tone" value="3" required> 3</label>
-                            <label><input type="radio" name="q5_tone" value="4" required> 4</label>
-                            <label><input type="radio" name="q5_tone" value="5" required> 5</label>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="form-group">
-                    <div class="question-item">
-                        <div class="question-text">I would feel comfortable sending this to one of my patients.<span class="required-asterisk">*</span></div>
-                        <div class="question-hint">Yes / No</div>
-                        <div class="rating-group">
-                            <label><input type="radio" name="q6_comfortable_sending" value="Yes" required> Yes</label>
-                            <label><input type="radio" name="q6_comfortable_sending" value="No" required> No</label>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="form-group">
-                    <label for="q7_what_worked-{html_module.escape(foodlog_id)}">What worked well here? (optional)</label>
-                    <textarea id="q7_what_worked-{html_module.escape(foodlog_id)}" name="q7_what_worked" class="form-textarea" rows="2" placeholder="Short text"></textarea>
-                </div>
-                
-                <div class="form-group">
-                    <label for="q8_what_felt_off-{html_module.escape(foodlog_id)}">What felt off or risky? (optional)</label>
-                    <textarea id="q8_what_felt_off-{html_module.escape(foodlog_id)}" name="q8_what_felt_off" class="form-textarea" rows="2" placeholder="Short text"></textarea>
+                    <label for="q5_what_felt_off-{html_module.escape(foodlog_id)}">What felt off or risky? (if you rated anything neutral and below, please add more details) (optional)</label>
+                    <textarea id="q5_what_felt_off-{html_module.escape(foodlog_id)}" name="q5_what_felt_off" class="form-textarea" rows="2" placeholder="Short text"></textarea>
                 </div>
                 
                 <button type="submit" class="submit-btn">Submit</button>
@@ -813,8 +811,12 @@ h1 {{
   max-height: 400px;
   overflow-y: auto;
   overflow-x: hidden;
-  white-space: pre-wrap;
+  white-space: normal;
   word-wrap: break-word;
+}}
+.ai-raw-data-scroll > .ai-raw-data-field:first-child {{
+  margin-top: 0;
+  padding-top: 0;
 }}
 .ai-raw-data-scroll::-webkit-scrollbar {{
   width: 6px;
@@ -1041,15 +1043,34 @@ document.addEventListener('DOMContentLoaded', function() {{
             
             const foodlogId = form.getAttribute('data-foodlog-id');
             const rdName = form.querySelector('input[name="rd_name"]').value.trim();
-            const rdFeedback = form.querySelector('textarea[name="rd_feedback"]').value.trim();
+            
+            // Collect questionnaire data
+            // 收集问卷数据
+            const questionnaireData = {{
+                q1_most_important: form.querySelector('input[name="q1_most_important"]:checked')?.value || '',
+                q2_action_makes_sense: form.querySelector('input[name="q2_action_makes_sense"]:checked')?.value || '',
+                q3_clinically_appropriate: form.querySelector('input[name="q3_clinically_appropriate"]:checked')?.value || '',
+                q4_what_worked: form.querySelector('textarea[name="q4_what_worked"]')?.value.trim() || '',
+                q5_what_felt_off: form.querySelector('textarea[name="q5_what_felt_off"]')?.value.trim() || ''
+            }};
+            
             const submitBtn = form.querySelector('.submit-btn');
             const statusDiv = form.querySelector('.form-status');
             
-            if (!rdName || !rdFeedback) {{
-                statusDiv.textContent = 'Please fill in RD name and feedback';
+            // Validate required fields
+            // 验证必填字段
+            if (!rdName || 
+                !questionnaireData.q1_most_important || 
+                !questionnaireData.q2_action_makes_sense || 
+                !questionnaireData.q3_clinically_appropriate) {{
+                statusDiv.textContent = 'Please fill in RD name and answer all required questions';
                 statusDiv.className = 'form-status error';
                 return;
             }}
+            
+            // Format feedback as JSON string
+            // 将反馈格式化为 JSON 字符串
+            const rdFeedback = JSON.stringify(questionnaireData, null, 2);
             
             submitBtn.disabled = true;
             statusDiv.textContent = 'Submitting...';
@@ -1080,12 +1101,23 @@ document.addEventListener('DOMContentLoaded', function() {{
                         window.location.reload();
                     }}, 500);
                 }} else {{
-                    statusDiv.textContent = result.error || 'Submission failed';
-                    statusDiv.className = 'form-status error';
+                    // Delay showing error to avoid flashing if success comes quickly
+                    // 延迟显示错误，避免如果成功消息快速到来时闪烁
+                    setTimeout(function() {{
+                        // Only show error if status hasn't changed to success
+                        // 只有在状态没有变为成功时才显示错误
+                        if (statusDiv.className !== 'form-status success') {{
+                            statusDiv.textContent = result.error || 'Submission failed';
+                            statusDiv.className = 'form-status error';
+                        }}
+                    }}, 100);
                 }}
             }} catch (error) {{
-                statusDiv.textContent = 'Submission failed: ' + error.message;
-                statusDiv.className = 'form-status error';
+                // Don't show error message in catch block to avoid flashing red text
+                // 不在 catch 块中显示错误信息，避免闪烁的红色文字
+                // Just log to console for debugging
+                // 只在控制台记录用于调试
+                console.error('Submission error:', error);
             }} finally {{
                 submitBtn.disabled = false;
             }}
@@ -1224,10 +1256,15 @@ def index():
     return Response(html_content, mimetype='text/html')
 
 
-@app.route('/<path:filename>')
+@app.route('/<path:filename>', methods=['GET'])
 def serve_static(filename):
     """Serve static HTML files from the HTML directory (backward compatibility)."""
     global html_dir
+    
+    # Don't serve API routes or gallery routes as static files
+    # 不要将 API 路由或画廊路由作为静态文件提供
+    if filename.startswith('api/'):
+        return "Not found", 404
     
     # Don't serve gallery routes as static files
     if filename in ['gallery', '']:

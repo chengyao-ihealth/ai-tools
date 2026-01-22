@@ -941,17 +941,29 @@ async function refreshFeedbacksFromSheet() {{
                         let escapedFeedback = '';
                         try {{
                             const questionnaireData = typeof feedbackText === 'string' ? JSON.parse(feedbackText) : feedbackText;
-                            if (typeof questionnaireData === 'object' && questionnaireData !== null && 'q1_clinically_appropriate' in questionnaireData) {{
+                            if (typeof questionnaireData === 'object' && questionnaireData !== null && ('q1_most_important' in questionnaireData || 'q1_clinically_appropriate' in questionnaireData)) {{
                                 // Format questionnaire data
                                 // 格式化问卷数据
-                                const questions = [
-                                    {{text: 'Clinically appropriate and safe', value: questionnaireData.q1_clinically_appropriate || ''}},
-                                    {{text: 'Main message focuses on most important thing', value: questionnaireData.q2_main_message || ''}},
-                                    {{text: 'Reasonably reflects what\\'s on plate/log', value: questionnaireData.q3_reflects_plate || ''}},
-                                    {{text: 'Suggested action makes sense', value: questionnaireData.q4_action_makes_sense || ''}},
-                                    {{text: 'Tone is supportive and patient-friendly', value: questionnaireData.q5_tone || ''}},
-                                    {{text: 'Comfortable sending to patients', value: questionnaireData.q6_comfortable_sending || ''}}
-                                ];
+                                // Support both old and new format for backward compatibility
+                                let questions = [];
+                                if ('q1_most_important' in questionnaireData) {{
+                                    // New format
+                                    questions = [
+                                        {{text: 'The insight correctly identifies and focuses on the most important thing about this meal', value: questionnaireData.q1_most_important || ''}},
+                                        {{text: 'The suggested action (if any) makes sense as a secondary step', value: questionnaireData.q2_action_makes_sense || ''}},
+                                        {{text: 'Clinically appropriate, safe, patient-friendly and comfortable sending to a patient', value: questionnaireData.q3_clinically_appropriate || ''}}
+                                    ];
+                                }} else {{
+                                    // Old format (backward compatibility)
+                                    questions = [
+                                        {{text: 'Clinically appropriate and safe', value: questionnaireData.q1_clinically_appropriate || ''}},
+                                        {{text: 'Main message focuses on most important thing', value: questionnaireData.q2_main_message || ''}},
+                                        {{text: 'Reasonably reflects what\\'s on plate/log', value: questionnaireData.q3_reflects_plate || ''}},
+                                        {{text: 'Suggested action makes sense', value: questionnaireData.q4_action_makes_sense || ''}},
+                                        {{text: 'Tone is supportive and patient-friendly', value: questionnaireData.q5_tone || ''}},
+                                        {{text: 'Comfortable sending to patients', value: questionnaireData.q6_comfortable_sending || ''}}
+                                    ];
+                                }}
                                 
                                 escapedFeedback = '<div class="questionnaire-results">';
                                 questions.forEach(q => {{
@@ -960,12 +972,16 @@ async function refreshFeedbacksFromSheet() {{
                                     }}
                                 }});
                                 
-                                if (questionnaireData.q7_what_worked) {{
-                                    escapedFeedback += '<div class="question-result"><strong>What worked well:</strong> ' + escapeHtml(questionnaireData.q7_what_worked).replace(/\\n/g, '<br/>') + '</div>';
+                                // Support both old and new format for text fields
+                                const whatWorked = questionnaireData.q4_what_worked || questionnaireData.q7_what_worked;
+                                const whatFeltOff = questionnaireData.q5_what_felt_off || questionnaireData.q8_what_felt_off;
+                                
+                                if (whatWorked) {{
+                                    escapedFeedback += '<div class="question-result"><strong>What worked well:</strong> ' + escapeHtml(whatWorked).replace(/\\n/g, '<br/>') + '</div>';
                                 }}
                                 
-                                if (questionnaireData.q8_what_felt_off) {{
-                                    escapedFeedback += '<div class="question-result"><strong>What felt off or risky:</strong> ' + escapeHtml(questionnaireData.q8_what_felt_off).replace(/\\n/g, '<br/>') + '</div>';
+                                if (whatFeltOff) {{
+                                    escapedFeedback += '<div class="question-result"><strong>What felt off or risky:</strong> ' + escapeHtml(whatFeltOff).replace(/\\n/g, '<br/>') + '</div>';
                                 }}
                                 
                                 escapedFeedback += '</div>';
@@ -1420,14 +1436,11 @@ document.addEventListener('DOMContentLoaded', function() {{
             // Collect questionnaire data
             // 收集问卷数据
             const questionnaireData = {{
-                q1_clinically_appropriate: form.querySelector('input[name="q1_clinically_appropriate"]:checked')?.value || '',
-                q2_main_message: form.querySelector('input[name="q2_main_message"]:checked')?.value || '',
-                q3_reflects_plate: form.querySelector('input[name="q3_reflects_plate"]:checked')?.value || '',
-                q4_action_makes_sense: form.querySelector('input[name="q4_action_makes_sense"]:checked')?.value || '',
-                q5_tone: form.querySelector('input[name="q5_tone"]:checked')?.value || '',
-                q6_comfortable_sending: form.querySelector('input[name="q6_comfortable_sending"]:checked')?.value || '',
-                q7_what_worked: form.querySelector('textarea[name="q7_what_worked"]')?.value.trim() || '',
-                q8_what_felt_off: form.querySelector('textarea[name="q8_what_felt_off"]')?.value.trim() || ''
+                q1_most_important: form.querySelector('input[name="q1_most_important"]:checked')?.value || '',
+                q2_action_makes_sense: form.querySelector('input[name="q2_action_makes_sense"]:checked')?.value || '',
+                q3_clinically_appropriate: form.querySelector('input[name="q3_clinically_appropriate"]:checked')?.value || '',
+                q4_what_worked: form.querySelector('textarea[name="q4_what_worked"]')?.value.trim() || '',
+                q5_what_felt_off: form.querySelector('textarea[name="q5_what_felt_off"]')?.value.trim() || ''
             }};
             
             const submitBtn = form.querySelector('.submit-btn');
@@ -1435,12 +1448,9 @@ document.addEventListener('DOMContentLoaded', function() {{
             
             // Validate required fields
             // 验证必填字段
-            if (!questionnaireData.q1_clinically_appropriate || 
-                !questionnaireData.q2_main_message || 
-                !questionnaireData.q3_reflects_plate || 
-                !questionnaireData.q4_action_makes_sense || 
-                !questionnaireData.q5_tone || 
-                !questionnaireData.q6_comfortable_sending) {{
+            if (!questionnaireData.q1_most_important || 
+                !questionnaireData.q2_action_makes_sense || 
+                !questionnaireData.q3_clinically_appropriate) {{
                 statusDiv.textContent = 'Please answer all required questions';
                 statusDiv.className = 'form-status error';
                 return;
@@ -1472,10 +1482,12 @@ document.addEventListener('DOMContentLoaded', function() {{
                     statusDiv.className = 'form-status error';
                 }}
             }} catch (error) {{
+                // Don't show error message in catch block to avoid flashing red text
+                // 不在 catch 块中显示错误信息，避免闪烁的红色文字
+                // Just log to console for debugging
+                // 只在控制台记录用于调试
                 console.error('[ERROR] Exception during submission:', error);
                 console.error('[ERROR] Error stack:', error.stack);
-                statusDiv.textContent = 'Submission failed: ' + (error.message || 'Unknown error');
-                statusDiv.className = 'form-status error';
             }} finally {{
                 submitBtn.disabled = false;
             }}
