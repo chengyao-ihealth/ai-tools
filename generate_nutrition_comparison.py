@@ -783,19 +783,6 @@ def generate_html(data, output_file, input_file):
                 `;
             }});
             
-            // 添加 Prompt
-            if (prompt) {{
-                const escapedPrompt = prompt.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                html += `
-                    <div class="prompt-section">
-                        <div style="font-size: 0.875rem; font-weight: 700; color: #1f2937; margin-bottom: 8px;">
-                            📄 System Prompt
-                        </div>
-                        <div class="prompt-content">${{escapedPrompt}}</div>
-                    </div>
-                `;
-            }}
-            
             return html;
         }}
 
