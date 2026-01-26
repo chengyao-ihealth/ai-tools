@@ -387,9 +387,12 @@ def build_card_html(row, images_dir: Path, display_columns: List[str], row_idx: 
     ai_raw_data_field = None
     other_fields = []
     
-    # Fields that should be in AI Generated Content (at the end)
-    # 应该放在AI Generated Content中的字段（靠后位置）
-    ai_content_fields = {'FoodLogLabels', 'MicroAction', 'ActionFamily', 'BestAnchor'}
+    # Fields that should be in collapsible AI data section
+    # 应该在可折叠AI数据区域显示的字段
+    collapsible_ai_fields = {
+        'AiObservations', 'FoodLogLabels', 'AiDetectedFoods', 
+        'AiCompositions', 'MicroAction', 'ActionFamily', 'BestAnchor'
+    }
     additional_raw_data_fields = []  # Fields to include in collapsible raw data section
     
     for col in display_columns:
@@ -413,8 +416,8 @@ def build_card_html(row, images_dir: Path, display_columns: List[str], row_idx: 
             formatted_label = format_field_name(col)
             allow_html = col.lower() in ['ingredients']
             
-            # Special handling for AI Identify Raw Data - make it collapsible
-            # 特殊处理AI Identify Raw Data - 使其可折叠
+            # Special handling for AI Identify Raw Data - make it collapsible (retain logic even if field doesn't exist)
+            # 特殊处理AI Identify Raw Data - 使其可折叠（即使字段不存在也保留逻辑）
             if col.lower() in ['aiidentifyrawdata', 'ai_identify_raw_data'] or 'identify' in col.lower() and 'raw' in col.lower():
                 ai_raw_data_field = {
                     'label': formatted_label,
@@ -422,44 +425,43 @@ def build_card_html(row, images_dir: Path, display_columns: List[str], row_idx: 
                     'allow_html': allow_html,
                     'foodlog_id': foodlog_id
                 }
+            elif col in collapsible_ai_fields:
+                # Add these AI fields to collapsible section
+                # 将这些AI字段添加到可折叠区域
+                additional_raw_data_fields.append((formatted_label, formatted_value))
             else:
-                # Add AI fields directly to other_fields (no blue box)
-                # 直接将AI字段添加到other_fields（不使用蓝框）
+                # Add other AI fields directly to other_fields (no blue box)
+                # 将其他AI字段直接添加到other_fields（不使用蓝框）
                 other_fields.append(para(formatted_label, formatted_value, escape_html=not allow_html))
-        elif col == 'FoodLogLabels':
-            # Add FoodLogLabels to collapsible raw data section (before MicroAction)
-            # 将 FoodLogLabels 添加到可折叠的原始数据部分（在 MicroAction 之前）
+        elif col in collapsible_ai_fields:
+            # Add non-Ai-prefixed fields that should be in collapsible section
+            # 添加应该在可折叠区域显示的非Ai前缀字段
             formatted_label = format_field_name(col)
             additional_raw_data_fields.append((formatted_label, formatted_value))
-        elif col in {'MicroAction', 'ActionFamily', 'BestAnchor'}:
-            # Collect these fields to include in collapsible raw data section
-            # 收集这些字段以包含在可折叠的原始数据部分
-            formatted_label = format_field_name(col)
-            additional_raw_data_fields.append((formatted_label, formatted_value))
-        elif col in ai_content_fields:
-            # Other fields in ai_content_fields (shouldn't happen now, but keep for safety)
-            # ai_content_fields 中的其他字段（现在不应该发生，但保留作为安全措施）
-            allow_html = col.lower() in ['ingredients']
-            other_fields.append(para(col, formatted_value, escape_html=not allow_html))
         else:
             allow_html = col.lower() in ['ingredients']
             other_fields.append(para(col, formatted_value, escape_html=not allow_html))
     
-    # Sort additional_raw_data_fields to ensure correct order: FoodLogLabels, then MicroAction, ActionFamily, BestAnchor
-    # 对 additional_raw_data_fields 进行排序以确保正确顺序：FoodLogLabels，然后是 MicroAction, ActionFamily, BestAnchor
+    # Sort additional_raw_data_fields to ensure correct order
+    # 对 additional_raw_data_fields 进行排序以确保正确顺序
     # Use formatted field names for sorting (format_field_name converts "FoodLogLabels" -> "Food Log Labels")
     # 使用格式化后的字段名进行排序（format_field_name 将 "FoodLogLabels" 转换为 "Food Log Labels"）
     field_order = {
-        format_field_name('FoodLogLabels'): 0,
-        format_field_name('MicroAction'): 1,
-        format_field_name('ActionFamily'): 2,
-        format_field_name('BestAnchor'): 3
+        format_field_name('AiObservations'): 0,
+        format_field_name('FoodLogLabels'): 1,
+        format_field_name('AiDetectedFoods'): 2,
+        format_field_name('AiCompositions'): 3,
+        format_field_name('MicroAction'): 4,
+        format_field_name('ActionFamily'): 5,
+        format_field_name('BestAnchor'): 6
     }
     if additional_raw_data_fields:
         additional_raw_data_fields.sort(key=lambda x: field_order.get(x[0], 999))
     
-    # Add AI Identify Raw Data as collapsible field (if exists), including additional fields
-    # 添加AI Identify Raw Data作为可折叠字段（如果存在），包括额外字段
+    # Add collapsible AI data section (includes AiIdentifyRawData if exists, and other specified AI fields)
+    # 添加可折叠的AI数据区域（如果存在则包括AiIdentifyRawData，以及其他指定的AI字段）
+    # Fields in collapsible section: AiObservations, FoodLogLabels, AiDetectedFoods, AiCompositions, MicroAction, ActionFamily, BestAnchor
+    # 可折叠区域中的字段：AiObservations, FoodLogLabels, AiDetectedFoods, AiCompositions, MicroAction, ActionFamily, BestAnchor
     if ai_raw_data_field or additional_raw_data_fields:
         other_fields.append(_build_collapsible_raw_data(ai_raw_data_field, foodlog_id, additional_raw_data_fields))
     
