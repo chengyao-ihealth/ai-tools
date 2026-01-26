@@ -211,6 +211,27 @@ def format_field_value(value: Any, field_name: str) -> str:
         return value
     elif field_name.lower() in ['description']:
         return value
+    # Special handling for MicroAction - expand abbreviations to full names
+    # 特殊处理 MicroAction - 将缩写扩展为全名
+    elif field_name.lower() == 'microaction':
+        # Map abbreviations to full names
+        # 将缩写映射为全名
+        microaction_map = {
+            'EO': 'EATING_ORDER',
+            'CA': 'COMPOSITION_ADDITION',
+            'SUB': 'SUBSTITUTION',
+            'PAIR': 'PAIRING',
+            'MOVE': 'GENTLE_MOVEMENT'
+        }
+        # Replace abbreviations (case-insensitive)
+        # 替换缩写（不区分大小写）
+        result = value
+        for abbrev, full_name in microaction_map.items():
+            # Replace whole word matches (case-insensitive)
+            # 替换整个单词匹配（不区分大小写）
+            pattern = r'\b' + re.escape(abbrev) + r'\b'
+            result = re.sub(pattern, full_name, result, flags=re.IGNORECASE)
+        return result
     # Special handling for AI Identify Raw Data - don't use humanize_json to avoid adding indentation
     # 特殊处理AI Identify Raw Data - 不使用humanize_json以避免添加缩进
     elif field_name.lower() in ['aiidentifyrawdata', 'ai_identify_raw_data'] or ('identify' in field_name.lower() and 'raw' in field_name.lower()):

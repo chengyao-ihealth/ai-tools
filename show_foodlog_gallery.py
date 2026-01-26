@@ -31,6 +31,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import sys
 import html
 import webbrowser
@@ -163,6 +164,27 @@ def format_field_value(value: Any, field_name: str) -> str:
         return value  # Keep as-is for titles
     elif field_name.lower() in ['description']:
         return value  # Keep as-is for descriptions
+    # Special handling for MicroAction - expand abbreviations to full names
+    # 特殊处理 MicroAction - 将缩写扩展为全名
+    elif field_name.lower() == 'microaction':
+        # Map abbreviations to full names
+        # 将缩写映射为全名
+        microaction_map = {
+            'EO': 'EATING_ORDER',
+            'CA': 'COMPOSITION_ADDITION',
+            'SUB': 'SUBSTITUTION',
+            'PAIR': 'PAIRING',
+            'MOVE': 'GENTLE_MOVEMENT'
+        }
+        # Replace abbreviations (case-insensitive)
+        # 替换缩写（不区分大小写）
+        result = value
+        for abbrev, full_name in microaction_map.items():
+            # Replace whole word matches (case-insensitive)
+            # 替换整个单词匹配（不区分大小写）
+            pattern = r'\b' + re.escape(abbrev) + r'\b'
+            result = re.sub(pattern, full_name, result, flags=re.IGNORECASE)
+        return result
     
     # Check if it looks like JSON and try to parse
     # 检查是否看起来像JSON并尝试解析
