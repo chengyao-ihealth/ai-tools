@@ -92,13 +92,14 @@ if __name__ == "__main__":
 
     # Can get it from https://portal.ihealthunifiedcare.com/care-portal/home -> inspect -> application -> session storage -> https://portal.ihealth-eng.com -> token
     # token = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzZXNzaW9uSWQiOiJlZmRlMDcwYzk1MGM5Y2VjY2Q0MDk0YjhkNDMxNjhhYzdhMWIzNGYxZjUwYWU0MGVkOTY3Y2FiYjRlM2JjZmNhIiwidXNlclR5cGUiOiJFTVBMT1lFRSIsImV4cCI6MTc1OTYwODUyNCwidXNlcklkIjoiNjhlMDEwYmRkYTlmYmE2NjU1OWY2NDVjIiwiaWF0IjoxNzU5NTIyMTI0LCJlbWFpbCI6ImNoZW5neWFvLnNoZW5AaWhlYWx0aGxhYnMuY29tIn0.clD0fH8tdpDcNevcjBU_CYPYh3zEr0rXzD0c8Lut39E"
-    token = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzZXNzaW9uSWQiOiJhYTI5M2Y0OWZmNmE4ZTM1YWRlYzMyMTk1M2QyNTRkOWUxMDdhZWViM2U0OGMxMWY0ODBhMTAxNWQyM2RkNDFiIiwidXNlclR5cGUiOiJFTVBMT1lFRSIsImV4cCI6MTc2ODQzNjQzNywidXNlcklkIjoiNjhlMDEwYmRkYTlmYmE2NjU1OWY2NDVjIiwiaWF0IjoxNzY4MzUwMDM3LCJlbWFpbCI6ImNoZW5neWFvLnNoZW5AaWhlYWx0aGxhYnMuY29tIn0.Z3TJtV3n1DeQ8w_OVf9oq5fWBoxlUR9MGLQbG4MYX8Q"
+    token = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzZXNzaW9uSWQiOiI4YjQ1NzRjZWE5YWFiMTEwYWI1MWQ2ZDc4NWRmN2U3MGE5ZWIyOThkZjNiYzQwODViODViNjI2MjQ3OTA0MmIxIiwidXNlclR5cGUiOiJFTVBMT1lFRSIsImV4cCI6MTc2OTcxMjIwNiwidXNlcklkIjoiNjhlMDEwYmRkYTlmYmE2NjU1OWY2NDVjIiwiaWF0IjoxNzY5NjI1ODA2LCJlbWFpbCI6ImNoZW5neWFvLnNoZW5AaWhlYWx0aGxhYnMuY29tIn0.183iFo8MjukAwtUHXIsrOfTfEI4vLhgCtNEtR9jPMbQ"
+    # "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzZXNzaW9uSWQiOiJhYTI5M2Y0OWZmNmE4ZTM1YWRlYzMyMTk1M2QyNTRkOWUxMDdhZWViM2U0OGMxMWY0ODBhMTAxNWQyM2RkNDFiIiwidXNlclR5cGUiOiJFTVBMT1lFRSIsImV4cCI6MTc2ODQzNjQzNywidXNlcklkIjoiNjhlMDEwYmRkYTlmYmE2NjU1OWY2NDVjIiwiaWF0IjoxNzY4MzUwMDM3LCJlbWFpbCI6ImNoZW5neWFvLnNoZW5AaWhlYWx0aGxhYnMuY29tIn0.Z3TJtV3n1DeQ8w_OVf9oq5fWBoxlUR9MGLQbG4MYX8Q"
     if not token:
         raise RuntimeError("Please set SESSION_TOKEN environment variable first, or modify the code to directly enter the token")
 
     # Modify to your CSV path
     # csv_path = "foodlog_ai_analysis_img_name.csv"
-    csv_path = "foodlog_ai_analysis_v3.csv"
+    csv_path = "foodlog_ai_analysis_v5.csv"
     out_dir = "./images"
 
     main(csv_path, out_dir, token)
