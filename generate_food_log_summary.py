@@ -962,27 +962,39 @@ def get_nutrition_info(client: MongoClient, patient_id: str, database_name: str 
                 result["biggest_medical_problem"] = ", ".join(all_problems)
         
         # 2. Get nutrition behavioral goals from uc_behavior_goals or care notes
-        # Try uc_behavior_goals first
+        # uc_behavior_goals: document _id IS patient ID (same as agent-service BehaviorGoal.get(patient_id))
         try:
             behavior_goals_collection = db["uc_behavior_goals"]
-            goals_doc = behavior_goals_collection.find_one({"memberId": query_id}) or \
-                       behavior_goals_collection.find_one({"memberId": patient_id}) or \
-                       behavior_goals_collection.find_one({"patient_id": query_id}) or \
-                       behavior_goals_collection.find_one({"patient_id": patient_id})
-            
+            goals_doc = behavior_goals_collection.find_one({"_id": query_id})
+            if not goals_doc and query_id != patient_id:
+                goals_doc = behavior_goals_collection.find_one({"_id": patient_id})
+            if not goals_doc:
+                goals_doc = behavior_goals_collection.find_one({"memberId": query_id}) or \
+                           behavior_goals_collection.find_one({"memberId": patient_id}) or \
+                           behavior_goals_collection.find_one({"patient_id": query_id}) or \
+                           behavior_goals_collection.find_one({"patient_id": patient_id})
             if goals_doc:
-                # Extract nutrition-related goals
                 goals_text = []
-                for key in ["goal", "goals", "nutritionGoal", "nutrition_goal", "behavioralGoal", "behavioral_goal"]:
-                    value = goals_doc.get(key)
-                    if value:
-                        if isinstance(value, list):
-                            goals_text.extend([str(g) for g in value])
+                # Prefer behaviorGoals list (BehaviorGoalItem: behaviorGoalType, goalStatus, behaviorGoalValue)
+                behavior_goals_list = goals_doc.get("behaviorGoals") or goals_doc.get("behavior_goals")
+                if behavior_goals_list and isinstance(behavior_goals_list, list):
+                    for item in behavior_goals_list[:10]:
+                        if isinstance(item, dict):
+                            v = item.get("behaviorGoalValue") or item.get("behavior_goal_value") or item.get("value")
+                            if v and str(v).strip():
+                                goals_text.append(str(v).strip())
                         else:
-                            goals_text.append(str(value))
-                
+                            goals_text.append(str(item))
+                if not goals_text:
+                    for key in ["goal", "goals", "nutritionGoal", "nutrition_goal", "behavioralGoal", "behavioral_goal"]:
+                        value = goals_doc.get(key)
+                        if value:
+                            if isinstance(value, list):
+                                goals_text.extend([str(g) for g in value])
+                            else:
+                                goals_text.append(str(value))
                 if goals_text:
-                    result["nutrition_behavioral_goals"] = "; ".join(goals_text[:3])  # Limit to 3
+                    result["nutrition_behavioral_goals"] = "; ".join(goals_text[:10])
         except Exception as e:
             print(f"[DEBUG] Error querying uc_behavior_goals: {e}")
         
@@ -2178,6 +2190,757 @@ def group_food_logs_by_meal(food_logs_df: pd.DataFrame, language: str = 'zh') ->
     return dict(grouped)
 
 
+def _format_behavior_goals_list(items: List[Dict[str, Any]]) -> str:
+    """Format uc_behavior_goals behaviorGoals list (behaviorGoalType, goalStatus, behaviorGoalValue)."""
+    parts = []
+    for i, item in enumerate(items[:10]):
+        if not isinstance(item, dict):
+            parts.append(str(item))
+            continue
+        t = item.get("behaviorGoalType") or item.get("behaviorGoal") or ""
+        s = item.get("goalStatus") or item.get("status") or ""
+        v = item.get("behaviorGoalValue") or item.get("value") or ""
+        line = " / ".join(x for x in [str(t), str(s), str(v)] if x)
+        if line:
+            parts.append(line)
+    return "; ".join(parts) if parts else ""
+
+
+def _format_clinical_goals_list(items: List[Dict[str, Any]]) -> str:
+    """Format uc_clinical_goals clinicalGoals list (Goal: condition, clinicalGoalName, isManualInput)."""
+    parts = []
+    for item in items[:10]:
+        if isinstance(item, dict):
+            c = item.get("condition") or item.get("conditionName") or ""
+            n = item.get("clinicalGoalName") or item.get("goalName") or ""
+            m = item.get("isManualInput")
+            line = " / ".join(x for x in [str(c), str(n), str(m)] if x != "" and x is not None)
+            parts.append(line if line else json.dumps(item, ensure_ascii=False, default=str))
+        else:
+            parts.append(str(item))
+    return "; ".join(parts) if parts else ""
+
+
+def _format_monthly_review_goals_list(items: List[Dict[str, Any]]) -> str:
+    """Format uc_monthly_review goals list (condition, clinicalGoalName, isManualInput)."""
+    parts = []
+    for item in items[:10]:
+        if not isinstance(item, dict):
+            parts.append(str(item))
+            continue
+        c = item.get("condition") or item.get("conditionName") or ""
+        n = item.get("clinicalGoalName") or item.get("goalName") or ""
+        m = item.get("isManualInput")
+        line = " / ".join(x for x in [str(c), str(n), str(m)] if x != "" and x is not None)
+        if line:
+            parts.append(line)
+    return "; ".join(parts) if parts else ""
+
+
+def _doc_display_text(doc: Dict[str, Any], text_keys: Optional[List[str]] = None) -> str:
+    """Extract display text from a doc; fallback to key-value dump. text_keys tried first."""
+    if text_keys is None:
+        text_keys = ["goal", "goals", "behaviorGoals", "clinicalGoals", "note", "content", "text", "assessment", "summary", "notes"]
+    for key in text_keys:
+        val = doc.get(key)
+        if val is None:
+            continue
+        if isinstance(val, list):
+            if not val:
+                continue
+            if key == "behaviorGoals" and isinstance(val[0], dict):
+                return _format_behavior_goals_list(val)
+            if key == "clinicalGoals":
+                return _format_clinical_goals_list(val)
+            if key == "goals" and isinstance(val[0], dict):
+                return _format_monthly_review_goals_list(val)
+            return "; ".join(str(v) for v in val[:5])
+        if str(val).strip():
+            return str(val).strip()
+    fields = []
+    for key, value in doc.items():
+        if key not in ["_id", "memberId", "patient_id", "patientId", "member_id"]:
+            try:
+                if isinstance(value, list) and value and isinstance(value[0], dict):
+                    if key == "behaviorGoals":
+                        fields.append(f"{key}: {_format_behavior_goals_list(value)}")
+                    elif key == "clinicalGoals":
+                        fields.append(f"{key}: {_format_clinical_goals_list(value)}")
+                    elif key == "goals":
+                        fields.append(f"{key}: {_format_monthly_review_goals_list(value)}")
+                    else:
+                        fields.append(f"{key}: {json.dumps(value, ensure_ascii=False, default=str)}")
+                elif isinstance(value, (dict, list)):
+                    fields.append(f"{key}: {json.dumps(value, ensure_ascii=False, default=str)}")
+                else:
+                    fields.append(f"{key}: {value}")
+            except (TypeError, ValueError):
+                fields.append(f"{key}: {repr(value)}")
+    return ", ".join(fields) if fields else ""
+
+
+def _doc_date_str(doc: Dict[str, Any]) -> str:
+    """Format createdAt or updatedAt from doc for display."""
+    for key in ["createdAt", "updatedAt", "date"]:
+        val = doc.get(key)
+        if val is not None:
+            try:
+                if isinstance(val, str):
+                    date_obj = datetime.fromisoformat(val.replace("Z", "+00:00"))
+                else:
+                    date_obj = val
+                return date_obj.strftime("%Y-%m-%d")
+            except Exception:
+                return str(val)
+    return ""
+
+
+def _format_lifestyle_display(doc: Dict[str, Any], language: str) -> str:
+    """Format uc_lifestyle_assessments for display with structured field presentation."""
+    lines = []
+    
+    # Physical Activities
+    activities = doc.get("physicalActivities") or doc.get("physical_activities") or []
+    if activities and isinstance(activities, list):
+        label = "Physical Activities" if language == "en" else "身体活动"
+        lines.append(f"{label}:")
+        for act in activities[:10]:
+            if isinstance(act, dict):
+                t = act.get("type", "Unknown").replace("_", " ").title()
+                intensity = act.get("intensity", "").replace("_", " ").title()
+                freq = act.get("frequency", "").replace("_", " ").lower()
+                lines.append(f"  • {t}: {intensity}, {freq}")
+            else:
+                lines.append(f"  • {act}")
+    
+    # Smoking/Drinking
+    smoke_drink = doc.get("smokeDrinkRecord") or doc.get("smoke_drink_record")
+    if smoke_drink and isinstance(smoke_drink, dict):
+        label = "Smoking/Drinking" if language == "en" else "吸烟饮酒"
+        lines.append(f"{label}:")
+        is_smoking = smoke_drink.get("isSmoking") or smoke_drink.get("is_smoking")
+        is_drinking = smoke_drink.get("isDrinking") or smoke_drink.get("is_drinking")
+        if is_drinking:
+            quit_year = smoke_drink.get("quitDrinkingYear") or smoke_drink.get("quit_drinking_year")
+            lines.append(f"  • Alcohol: {'Stopped in ' + str(quit_year) if quit_year else 'Currently drinking'}")
+        if is_smoking:
+            quit_year = smoke_drink.get("quitSmokingYear") or smoke_drink.get("quit_smoking_year")
+            lines.append(f"  • Smoking: {'Stopped in ' + str(quit_year) if quit_year else 'Currently smoking'}")
+    
+    # Fast Food
+    fast_food = doc.get("fastFoodFreq") or doc.get("fast_food_freq") or []
+    if fast_food and isinstance(fast_food, list):
+        label = "Fast Food Frequency" if language == "en" else "快餐频率"
+        lines.append(f"{label}:")
+        for item in fast_food[:5]:
+            if isinstance(item, dict):
+                t = item.get("type", "Fast food")
+                v = item.get("value", "")
+                u = item.get("unit", "").lower()
+                lines.append(f"  • {t}: {v} times {u}")
+    
+    # Beverages
+    beverages = doc.get("beverageFreq") or doc.get("beverage_freq") or []
+    if beverages and isinstance(beverages, list):
+        label = "Beverage Frequency" if language == "en" else "饮料频率"
+        lines.append(f"{label}:")
+        for item in beverages[:5]:
+            if isinstance(item, dict):
+                t = item.get("type", "Beverage")
+                v = item.get("value", "")
+                u = item.get("unit", "").lower()
+                lines.append(f"  • {t}: {v} times {u}")
+    
+    # Nutrition Understanding
+    nu = doc.get("nutritionUnderstanding") or doc.get("nutrition_understanding")
+    if nu and str(nu).strip():
+        label = "Nutrition Understanding" if language == "en" else "营养理解"
+        lines.append(f"{label}: {str(nu).strip()}")
+    
+    # Meal & Sleep Routines
+    routines = doc.get("mealAndSleepRoutines") or doc.get("meal_and_sleep_routines") or []
+    if routines and isinstance(routines, list):
+        label = "Meal & Sleep Routines" if language == "en" else "饮食睡眠规律"
+        lines.append(f"{label}:")
+        for r in routines[:10]:
+            if isinstance(r, dict):
+                t = r.get("type", "").replace("_", " ").title()
+                if t in ["Wakeup", "Sleep"]:
+                    start = r.get("startTime") or r.get("start_time")
+                    lines.append(f"  • {t}: {start if start else 'N/A'}")
+                else:
+                    food = r.get("foodTypeAmount") or r.get("food_type_amount") or "N/A"
+                    lines.append(f"  • {t}: {food}")
+    
+    # Previous Diets
+    prev = doc.get("previousDiets") or doc.get("previous_diets") or []
+    if prev and isinstance(prev, list):
+        label = "Previous Diets" if language == "en" else "既往饮食"
+        lines.append(f"{label}: {', '.join(str(d).replace('_', ' ').title() for d in prev[:10])}")
+    
+    # Is Eating Fast Food
+    is_ff = doc.get("isEatingFastFood") or doc.get("is_eating_fast_food")
+    if is_ff is not None:
+        label = "Eating Fast Food" if language == "en" else "是否吃快餐"
+        lines.append(f"{label}: {'Yes' if is_ff else 'No'}")
+    
+    # Stress Management
+    stress = doc.get("stressManagement") or doc.get("stress_management")
+    if stress and isinstance(stress, dict):
+        label = "Stress Management" if language == "en" else "压力管理"
+        level = stress.get("stressLevel") or stress.get("stress_level") or ""
+        strategy = stress.get("strategy") or ""
+        depression = stress.get("recentDepression") or stress.get("recent_depression") or ""
+        lines.append(f"{label}: Level={level}, Strategy={strategy}, Recent Depression={depression}")
+    
+    # Additional Comments (shown separately, but include here for completeness)
+    additional = doc.get("additionalComments") or doc.get("additional_comments")
+    if additional and str(additional).strip():
+        label = "Additional Comments" if language == "en" else "补充说明"
+        lines.append(f"{label}: {str(additional).strip()}")
+    
+    return "\n".join(lines) if lines else ""
+
+
+def _format_nutrition_display(doc: Dict[str, Any], language: str) -> str:
+    """Format uc_nutritions (Dietary) for display, matching agent-service Dietary.description format."""
+    lines = []
+    
+    # Updated At
+    updated_at = doc.get("updatedAt") or doc.get("updated_at")
+    if updated_at:
+        try:
+            if isinstance(updated_at, str):
+                date_str = updated_at[:10]
+            else:
+                date_str = updated_at.strftime('%Y-%m-%d')
+            label = "Last updated" if language == "en" else "最后更新"
+            lines.append(f"{label}: {date_str}")
+        except Exception:
+            pass
+    
+    # Fast Food Frequency
+    ff = doc.get("fastFoodFreq") or doc.get("fast_food_freq")
+    if ff and isinstance(ff, dict):
+        v = ff.get("value", "")
+        u = ff.get("unit", "").lower() if ff.get("unit") else ""
+        if v and u:
+            label = "Fast Food Frequency" if language == "en" else "快餐频率"
+            lines.append(f"{label}: {v} times {u}")
+    
+    # Sweet Beverage Frequency
+    sb = doc.get("sweetBeverageFreq") or doc.get("sweet_beverage_freq")
+    if sb and isinstance(sb, dict):
+        v = sb.get("value", "")
+        u = sb.get("unit", "").lower() if sb.get("unit") else ""
+        if v and u:
+            label = "Sweet Beverage Frequency" if language == "en" else "甜饮料频率"
+            lines.append(f"{label}: {v} times {u}")
+    
+    # Nutrition Understanding
+    nu = doc.get("nutritionUnderstanding") or doc.get("nutrition_understanding")
+    if nu and str(nu).strip():
+        label = "Nutrition Understanding" if language == "en" else "营养理解"
+        lines.append(f"{label}: {str(nu).strip()}")
+    
+    # Intake (Meal Intake Details)
+    intake = doc.get("intake") or []
+    if intake and isinstance(intake, list):
+        lines.append("")  # Empty line before intake section
+        label = "Meal Intake Details" if language == "en" else "饮食摄入详情"
+        lines.append(f"{label}:")
+        for item in intake[:10]:
+            if isinstance(item, dict):
+                meal = item.get("meal", "Unknown Meal")
+                if meal and isinstance(meal, str):
+                    meal = meal.replace("_", " ").title()
+                time_range = item.get("timeRange") or item.get("time_range") or "Unknown Time"
+                food = item.get("foodTypeAmount") or item.get("food_type_amount") or "Unknown Amount"
+                freq = item.get("mealFreq") or item.get("meal_freq") or "Unknown Frequency"
+                lines.append(f"- {meal}: Time Range: {time_range}, Food Amount: {food}, Frequency: {freq}")
+    
+    # Previous Diets
+    prev = doc.get("previousDiets") or doc.get("previous_diets") or []
+    if prev and isinstance(prev, list) and prev:
+        label = "Previous Diets" if language == "en" else "既往饮食"
+        diets_str = ", ".join(str(d).replace("_", " ").title() for d in prev[:10] if d)
+        if diets_str:
+            lines.append(f"{label}: {diets_str}")
+    
+    return "\n".join(lines) if lines else ""
+
+
+def build_patient_info_html(
+    patient_info: Dict[str, Any],
+    patient_id: str,
+    language: str = 'zh',
+    care_notes: Optional[List[Dict[str, Any]]] = None,
+    behavior_goals: Optional[List[Dict[str, Any]]] = None,
+    monthly_reviews: Optional[List[Dict[str, Any]]] = None,
+    clinical_goals: Optional[List[Dict[str, Any]]] = None,
+    lifestyle_assessments: Optional[List[Dict[str, Any]]] = None,
+    nutritions: Optional[List[Dict[str, Any]]] = None,
+    chat_messages: Optional[List[Dict[str, Any]]] = None,
+    pre_visit_history: Optional[List[Dict[str, Any]]] = None
+) -> str:
+    """
+    Build only the Patient Information HTML block (for display on main page or in summary).
+    Returns HTML string for patient details, care notes, behavior goals, monthly reviews, clinical goals, lifestyle assessments, nutritions, chat history, pre-visit summary history.
+    """
+    labels = {
+        'zh': {
+            'patient_info': '患者信息',
+            'years_old': '岁',
+            'male': '男性',
+            'female': '女性',
+            'weight': '体重',
+            'height': '身高',
+            'medical_history': '疾病史',
+            'ethnicity': '民族',
+            'region': '地域',
+            'exercise_intensity': '运动强度',
+            'medications': '当前用药',
+        },
+        'en': {
+            'patient_info': 'Patient Information',
+            'years_old': ' years old',
+            'male': 'Male',
+            'female': 'Female',
+            'weight': 'Weight',
+            'height': 'Height',
+            'medical_history': 'Medical History',
+            'ethnicity': 'Ethnicity',
+            'region': 'Region',
+            'exercise_intensity': 'Exercise Intensity',
+            'medications': 'Current Medications',
+        }
+    }
+    t = labels.get(language, labels['zh'])
+
+    patient_info_html = f"""
+    <div class="patient-info">
+        <h2>{t['patient_info']}</h2>
+        <ul class="patient-details">
+    """
+
+    age_val = patient_info.get("age")
+    if age_val is not None and age_val != "":
+        gender_display = patient_info.get("gender_display") or patient_info.get("gender") or ""
+        gender_identity = patient_info.get("gender_identity") or ""
+        gender_text = ""
+        if gender_display:
+            gender_text = f", {gender_display}"
+        elif gender_display := patient_info.get("gender"):
+            gender_lower = str(gender_display).lower().strip()
+            if gender_lower in ["male", "m", "男"]:
+                gender_text = f", {t['male']}"
+            elif gender_lower in ["female", "f", "女"]:
+                gender_text = f", {t['female']}"
+        gender_identity_text = ""
+        if gender_identity:
+            gender_identity_text = f" ({gender_identity})"
+        age_suffix = t['years_old'] if language == 'zh' else ' years old'
+        age_label = "年龄" if language == 'zh' else "Age"
+        patient_info_html += f'<li><strong>{age_label}:</strong> {age_val}{age_suffix}{gender_text}{gender_identity_text}</li>'
+
+    weight_val = patient_info.get("weight")
+    height_val = patient_info.get("height")
+    if weight_val is not None and weight_val != "" and height_val is not None and height_val != "":
+        patient_info_html += f'<li><strong>{t["weight"]}:</strong> {weight_val}kg, <strong>{t["height"]}:</strong> {height_val}cm</li>'
+    elif weight_val is not None and weight_val != "":
+        patient_info_html += f'<li><strong>{t["weight"]}:</strong> {weight_val}kg</li>'
+    elif height_val is not None and height_val != "":
+        patient_info_html += f'<li><strong>{t["height"]}:</strong> {height_val}cm</li>'
+
+    bmi_val = patient_info.get("bmi")
+    if bmi_val is not None and bmi_val != "":
+        patient_info_html += f'<li><strong>BMI:</strong> {bmi_val}</li>'
+
+    diagnoses = patient_info.get("diagnoses")
+    if diagnoses and str(diagnoses).strip():
+        diagnoses_label = "诊断" if language == 'zh' else "Diagnoses"
+        patient_info_html += f'<li><strong>{diagnoses_label}:</strong> {html.escape(str(diagnoses))}</li>'
+
+    ethnicity = patient_info.get("ethnicity")
+    if ethnicity and str(ethnicity).strip():
+        patient_info_html += f'<li><strong>{t["ethnicity"]}:</strong> {html.escape(str(ethnicity))}</li>'
+
+    region = patient_info.get("region")
+    if region and str(region).strip():
+        patient_info_html += f'<li><strong>{t["region"]}:</strong> {html.escape(str(region))}</li>'
+
+    exercise = patient_info.get("exercise_intensity")
+    if exercise and str(exercise).strip():
+        patient_info_html += f'<li><strong>{t["exercise_intensity"]}:</strong> {html.escape(str(exercise))}</li>'
+
+    medications = patient_info.get("medications")
+    if medications and str(medications).strip():
+        patient_info_html += f'<li><strong>{t["medications"]}:</strong> {html.escape(str(medications))}</li>'
+
+    has_detailed_info = any([age_val, weight_val, height_val, bmi_val, diagnoses, ethnicity, region, exercise, medications])
+
+    biggest_problem = patient_info.get("biggest_medical_problem")
+    nutrition_goals = patient_info.get("nutrition_behavioral_goals")
+    nutrition_assessment = patient_info.get("nutrition_assessment")
+    if biggest_problem and str(biggest_problem).strip():
+        label = "主要医疗问题" if language == 'zh' else "Primary Medical Problem"
+        formatted_problem = format_text_with_line_breaks(str(biggest_problem).strip())
+        patient_info_html += f'<li><strong>{label}:</strong><br>{formatted_problem}</li>'
+    if nutrition_goals and str(nutrition_goals).strip():
+        label = "营养行为目标" if language == 'zh' else "Nutrition Behavioral Goals"
+        formatted_goals = format_nutrition_goals(str(nutrition_goals).strip(), language)
+        patient_info_html += f'<li><strong>{label}:</strong><br>{formatted_goals}</li>'
+    if nutrition_assessment and str(nutrition_assessment).strip():
+        label = "初始营养评估" if language == 'zh' else "Initial Nutrition Assessment"
+        formatted_assessment = format_text_with_line_breaks(str(nutrition_assessment).strip())
+        patient_info_html += f'<li><strong>{label}:</strong><br>{formatted_assessment}</li>'
+
+    has_key_items = any([biggest_problem, nutrition_goals, nutrition_assessment])
+    if not has_detailed_info and not has_key_items:
+        no_info_msg = "暂无患者信息" if language == 'zh' else "No patient information available"
+        patient_info_html += f'<li style="color: #999; font-style: italic;">{no_info_msg}</li>'
+
+    patient_info_html += """
+        </ul>
+    """
+
+    if care_notes and len(care_notes) > 0:
+        care_notes_label = "Care Notes" if language == 'en' else "Care Notes"
+        view_details_text = "查看详情" if language == 'zh' else "View Details"
+        patient_info_html += f"""
+        <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #e0e0e0;">
+            <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px; color: #2c3e50;">{care_notes_label}</h3>
+            <div style="max-height: 300px; overflow-y: auto;">
+        """
+        for index, note in enumerate(care_notes):
+            full_note_text = ''
+            if note.get('note'):
+                full_note_text = note['note']
+            elif note.get('content'):
+                full_note_text = note['content']
+            elif note.get('text'):
+                full_note_text = note['text']
+            else:
+                fields = []
+                for key, value in note.items():
+                    if key not in ['_id', 'memberId', 'patient_id']:
+                        if isinstance(value, (dict, list)):
+                            fields.append(f"{key}: {json.dumps(value, ensure_ascii=False)}")
+                        else:
+                            fields.append(f"{key}: {value}")
+                full_note_text = ', '.join(fields) if fields else 'No content'
+            summary = full_note_text[:100] + '...' if len(full_note_text) > 100 else full_note_text
+            date_str = ''
+            if note.get('createdAt'):
+                try:
+                    if isinstance(note['createdAt'], str):
+                        date_obj = datetime.fromisoformat(note['createdAt'].replace('Z', '+00:00'))
+                    else:
+                        date_obj = note['createdAt']
+                    date_str = date_obj.strftime('%Y-%m-%d')
+                except Exception:
+                    date_str = str(note.get('createdAt', ''))
+            note_id = str(note.get('_id', index))
+            patient_info_html += f"""
+            <div style="margin: 8px 0; padding: 8px; background: #f8f9fa; border-left: 3px solid #4a90e2; border-radius: 4px;">
+                {f'<div style="font-size: 11px; color: #999; margin-bottom: 4px;">{html.escape(date_str)}</div>' if date_str else ''}
+                <div style="font-size: 13px; color: #333; margin-bottom: 6px;">{html.escape(summary)}</div>
+                <a href="/care-note/{html.escape(str(patient_id))}/{html.escape(note_id)}" target="_blank" style="font-size: 12px; color: #4a90e2; text-decoration: none; font-weight: 600;">{view_details_text} →</a>
+            </div>
+            """
+        patient_info_html += """
+            </div>
+        </div>
+        """
+    elif care_notes is not None:
+        no_care_notes_text = "暂无Care Notes" if language == 'zh' else "No Care Notes"
+        patient_info_html += f"""
+        <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #e0e0e0;">
+            <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px; color: #2c3e50;">Care Notes</h3>
+            <div style="color: #999; font-style: italic;">{no_care_notes_text}</div>
+        </div>
+        """
+
+    # uc_behavior_goals
+    _section_title_zh = "行为目标 (uc_behavior_goals)"
+    _section_title_en = "Behavior Goals (uc_behavior_goals)"
+    _no_data_zh = "暂无数据"
+    _no_data_en = "No data"
+    if behavior_goals and len(behavior_goals) > 0:
+        patient_info_html += f"""
+        <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #e0e0e0;">
+            <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px; color: #2c3e50;">{_section_title_zh if language == 'zh' else _section_title_en}</h3>
+            <div style="max-height: 200px; overflow-y: auto;">
+        """
+        for idx, doc in enumerate(behavior_goals):
+            text = _doc_display_text(doc, ["behaviorGoals", "goal", "goals", "nutritionGoal", "nutrition_goal", "behavioralGoal", "behavioral_goal", "note", "content", "text"])
+            summary = text
+            date_str = _doc_date_str(doc)
+            patient_info_html += f"""
+            <div style="margin: 8px 0; padding: 8px; background: #f8f9fa; border-left: 3px solid #28a745; border-radius: 4px;">
+                {f'<div style="font-size: 11px; color: #999; margin-bottom: 4px;">{html.escape(date_str)}</div>' if date_str else ''}
+                <div style="font-size: 13px; color: #333;">{html.escape(summary)}</div>
+            </div>
+            """
+        patient_info_html += """
+            </div>
+        </div>
+        """
+    else:
+        patient_info_html += f"""
+        <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #e0e0e0;">
+            <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px; color: #2c3e50;">{_section_title_zh if language == 'zh' else _section_title_en}</h3>
+            <div style="color: #999; font-style: italic;">{_no_data_zh if language == 'zh' else _no_data_en}</div>
+        </div>
+        """
+
+    # uc_monthly_review
+    _mr_title_zh = "月度回顾 (uc_monthly_review)"
+    _mr_title_en = "Monthly Review (uc_monthly_review)"
+    if monthly_reviews and len(monthly_reviews) > 0:
+        patient_info_html += f"""
+        <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #e0e0e0;">
+            <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px; color: #2c3e50;">{_mr_title_zh if language == 'zh' else _mr_title_en}</h3>
+            <div style="max-height: 200px; overflow-y: auto;">
+        """
+        view_details_text = "查看详情" if language == 'zh' else "View Details"
+        for idx, doc in enumerate(monthly_reviews):
+            # Monthly Review: prioritize note (unique review content), then goals; avoid showing only goals (same as clinical goals)
+            note_text = (doc.get("note") or doc.get("assessment") or doc.get("nutritionAssessment")
+                         or doc.get("initialAssessment") or doc.get("summary") or doc.get("notes") or "")
+            if isinstance(note_text, str) and note_text.strip():
+                text = note_text.strip()
+            else:
+                # Fallback to goals if no note
+                text = _doc_display_text(doc, ["goals"])
+            if not text:
+                text = _doc_display_text(doc, ["assessment", "nutritionAssessment", "initialAssessment", "summary", "notes", "content", "text"])
+            goals_text = _doc_display_text(doc, ["goals"])
+            if goals_text and text != goals_text:
+                text = f"{text}\n\nGoals: {goals_text}"
+            summary = (text[:100] + '...') if len(text) > 100 else text
+            date_str = _doc_date_str(doc)
+            note_id = str(doc.get('_id', idx))
+            patient_info_html += f"""
+            <div style="margin: 8px 0; padding: 8px; background: #f8f9fa; border-left: 3px solid #17a2b8; border-radius: 4px;">
+                {f'<div style="font-size: 11px; color: #999; margin-bottom: 4px;">{html.escape(date_str)}</div>' if date_str else ''}
+                <div style="font-size: 13px; color: #333; margin-bottom: 6px;">{html.escape(summary)}</div>
+                <a href="/monthly-review/{html.escape(str(patient_id))}/{html.escape(note_id)}" target="_blank" style="font-size: 12px; color: #4a90e2; text-decoration: none; font-weight: 600;">{view_details_text} →</a>
+            </div>
+            """
+        patient_info_html += """
+            </div>
+        </div>
+        """
+    else:
+        patient_info_html += f"""
+        <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #e0e0e0;">
+            <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px; color: #2c3e50;">{_mr_title_zh if language == 'zh' else _mr_title_en}</h3>
+            <div style="color: #999; font-style: italic;">{_no_data_zh if language == 'zh' else _no_data_en}</div>
+        </div>
+        """
+
+    # uc_clinical_goals
+    _cg_title_zh = "临床目标 (uc_clinical_goals)"
+    _cg_title_en = "Clinical Goals (uc_clinical_goals)"
+    if clinical_goals and len(clinical_goals) > 0:
+        patient_info_html += f"""
+        <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #e0e0e0;">
+            <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px; color: #2c3e50;">{_cg_title_zh if language == 'zh' else _cg_title_en}</h3>
+            <div style="max-height: 200px; overflow-y: auto;">
+        """
+        for idx, doc in enumerate(clinical_goals):
+            text = _doc_display_text(doc, ["clinicalGoals", "goal", "goals", "note", "content", "text"])
+            summary = text
+            date_str = _doc_date_str(doc)
+            patient_info_html += f"""
+            <div style="margin: 8px 0; padding: 8px; background: #f8f9fa; border-left: 3px solid #6f42c1; border-radius: 4px;">
+                {f'<div style="font-size: 11px; color: #999; margin-bottom: 4px;">{html.escape(date_str)}</div>' if date_str else ''}
+                <div style="font-size: 13px; color: #333;">{html.escape(summary)}</div>
+            </div>
+            """
+        patient_info_html += """
+            </div>
+        </div>
+        """
+    else:
+        patient_info_html += f"""
+        <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #e0e0e0;">
+            <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px; color: #2c3e50;">{_cg_title_zh if language == 'zh' else _cg_title_en}</h3>
+            <div style="color: #999; font-style: italic;">{_no_data_zh if language == 'zh' else _no_data_en}</div>
+        </div>
+        """
+
+    # uc_lifestyle_assessments (emphasize additionalComments)
+    _la_title_zh = "生活方式评估 (uc_lifestyle_assessments)"
+    _la_title_en = "Lifestyle Assessment (uc_lifestyle_assessments)"
+    _ac_label_zh = "补充说明 (Additional Comments)"
+    _ac_label_en = "Additional Comments"
+    if lifestyle_assessments and len(lifestyle_assessments) > 0:
+        patient_info_html += f"""
+        <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #e0e0e0;">
+            <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px; color: #2c3e50;">{_la_title_zh if language == 'zh' else _la_title_en}</h3>
+            <div style="max-height: 300px; overflow-y: auto;">
+        """
+        for idx, doc in enumerate(lifestyle_assessments):
+            date_str = _doc_date_str(doc)
+            formatted = _format_lifestyle_display(doc, language)
+            if not formatted:
+                formatted = _no_data_zh if language == "zh" else _no_data_en
+            patient_info_html += f"""
+            <div style="margin: 8px 0; padding: 12px; background: #f8f9fa; border-left: 3px solid #fd7e14; border-radius: 4px;">
+                {f'<div style="font-size: 11px; color: #999; margin-bottom: 8px;">{html.escape(date_str)}</div>' if date_str else ''}
+                <div style="font-size: 13px; color: #333; white-space: pre-wrap;">{html.escape(formatted)}</div>
+            </div>
+            """
+        patient_info_html += """
+            </div>
+        </div>
+        """
+    else:
+        patient_info_html += f"""
+        <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #e0e0e0;">
+            <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px; color: #2c3e50;">{_la_title_zh if language == 'zh' else _la_title_en}</h3>
+            <div style="color: #999; font-style: italic;">{_no_data_zh if language == 'zh' else _no_data_en}</div>
+        </div>
+        """
+
+    # uc_nutritions
+    _nut_title_zh = "营养记录 (uc_nutritions)"
+    _nut_title_en = "Nutrition Records (uc_nutritions)"
+    if nutritions and len(nutritions) > 0:
+        patient_info_html += f"""
+        <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #e0e0e0;">
+            <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px; color: #2c3e50;">{_nut_title_zh if language == 'zh' else _nut_title_en}</h3>
+            <div style="max-height: 250px; overflow-y: auto;">
+        """
+        for idx, doc in enumerate(nutritions):
+            date_str = _doc_date_str(doc)
+            formatted = _format_nutrition_display(doc, language)
+            if not formatted:
+                formatted = _doc_display_text(doc, ["assessment", "initialAssessment", "baselineAssessment", "summary", "notes", "note", "content", "text"])
+            patient_info_html += f"""
+            <div style="margin: 8px 0; padding: 12px; background: #f8f9fa; border-left: 3px solid #20c997; border-radius: 4px;">
+                {f'<div style="font-size: 11px; color: #999; margin-bottom: 8px;">{html.escape(date_str)}</div>' if date_str else ''}
+                <div style="font-size: 13px; color: #333; white-space: pre-wrap;">{html.escape(formatted)}</div>
+            </div>
+            """
+        patient_info_html += """
+            </div>
+        </div>
+        """
+    else:
+        patient_info_html += f"""
+        <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #e0e0e0;">
+            <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px; color: #2c3e50;">{_nut_title_zh if language == 'zh' else _nut_title_en}</h3>
+            <div style="color: #999; font-style: italic;">{_no_data_zh if language == 'zh' else _no_data_en}</div>
+        </div>
+        """
+
+    # Chat History Summary
+    _chat_title_zh = "聊天记录摘要"
+    _chat_title_en = "Chat History Summary"
+    if chat_messages and len(chat_messages) > 0:
+        patient_info_html += f"""
+        <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #e0e0e0;">
+            <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px; color: #2c3e50;">
+                {_chat_title_zh if language == 'zh' else _chat_title_en}
+                <a href="/chat-history/{html.escape(patient_id)}" target="_blank" style="margin-left: 10px; font-size: 13px; color: #4a90e2; text-decoration: none;">
+                    {"查看完整历史" if language == 'zh' else "View Full History"} →
+                </a>
+            </h3>
+            <div style="max-height: 300px; overflow-y: auto;">
+        """
+        # Show last 10 messages as preview
+        preview_messages = chat_messages[-10:] if len(chat_messages) > 10 else chat_messages
+        for msg in preview_messages:
+            payload = msg.get('payload', {})
+            text = payload.get('text', '')
+            user_role = payload.get('userRole', 'unknown')
+            display_name = payload.get('displayName', user_role)
+            timestamp = msg.get('timestamp', 0)
+            
+            # Convert timestamp
+            try:
+                from datetime import datetime
+                # Unix 100-nanosecond units: seconds = timestamp // 10^7 (agent-service unix100ns_to_datetime_str)
+                seconds = timestamp // 10**7
+                dt = datetime.fromtimestamp(seconds)
+                time_str = dt.strftime('%Y-%m-%d %H:%M')
+            except Exception:
+                time_str = ''
+            
+            # Color based on role
+            border_color = '#2196f3' if user_role == 'patient' else '#9c27b0'
+            bg_color = '#e3f2fd' if user_role == 'patient' else '#f3e5f5'
+            
+            patient_info_html += f"""
+            <div style="margin: 8px 0; padding: 10px; background: {bg_color}; border-left: 3px solid {border_color}; border-radius: 4px;">
+                <div style="font-size: 11px; color: #666; margin-bottom: 4px;">
+                    <strong>{html.escape(display_name)}</strong> - {html.escape(time_str)}
+                </div>
+                <div style="font-size: 13px; color: #333; white-space: pre-wrap;">{html.escape(text[:200] + ('...' if len(text) > 200 else ''))}</div>
+            </div>
+            """
+        
+        if len(chat_messages) > 10:
+            patient_info_html += f"""
+            <div style="text-align: center; margin-top: 10px; padding: 10px; background: #f8f9fa; border-radius: 4px;">
+                <a href="/chat-history/{html.escape(patient_id)}" target="_blank" style="color: #4a90e2; text-decoration: none; font-weight: 600;">
+                    {"查看全部 " + str(len(chat_messages)) + " 条消息" if language == 'zh' else f"View all {len(chat_messages)} messages"} →
+                </a>
+            </div>
+            """
+        
+        patient_info_html += """
+            </div>
+        </div>
+        """
+    else:
+        patient_info_html += f"""
+        <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #e0e0e0;">
+            <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px; color: #2c3e50;">{_chat_title_zh if language == 'zh' else _chat_title_en}</h3>
+            <div style="color: #999; font-style: italic;">{_no_data_zh if language == 'zh' else _no_data_en}</div>
+        </div>
+        """
+
+    # Pre-Visit Summary History (from MySQL pre_visit_summary_history)
+    _pv_title_zh = "Pre-Visit Summary 历史"
+    _pv_title_en = "Pre-Visit Summary History"
+    if pre_visit_history and len(pre_visit_history) > 0:
+        patient_info_html += f"""
+        <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #e0e0e0;">
+            <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px; color: #2c3e50;">{_pv_title_zh if language == 'zh' else _pv_title_en}</h3>
+            <div style="max-height: 300px; overflow-y: auto;">
+        """
+        for rec in pre_visit_history:
+            gen_time = rec.get("generation_time", "")
+            summary = rec.get("full_summary", "")
+            summary_display = (summary[:300] + "...") if len(summary) > 300 else summary
+            patient_info_html += f"""
+            <div style="margin: 8px 0; padding: 12px; background: #f0f7ff; border-left: 3px solid #0066cc; border-radius: 4px;">
+                {f'<div style="font-size: 11px; color: #666; margin-bottom: 8px;">{html.escape(gen_time)}</div>' if gen_time else ''}
+                <div style="font-size: 13px; color: #333; white-space: pre-wrap;">{html.escape(summary_display)}</div>
+            </div>
+            """
+        patient_info_html += """
+            </div>
+        </div>
+        """
+    else:
+        patient_info_html += f"""
+        <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #e0e0e0;">
+            <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px; color: #2c3e50;">{_pv_title_zh if language == 'zh' else _pv_title_en}</h3>
+            <div style="color: #999; font-style: italic;">{_no_data_zh if language == 'zh' else _no_data_en}</div>
+        </div>
+        """
+
+    patient_info_html += """
+    </div>
+    """
+    return patient_info_html
+
+
 def generate_html_summary(
     patient_info: Dict[str, Any],
     food_logs_by_meal: Dict[str, List[pd.Series]],
@@ -2189,7 +2952,8 @@ def generate_html_summary(
     language: str = 'zh',
     care_notes: Optional[List[Dict[str, Any]]] = None,
     meal_summaries: Optional[Dict[str, Dict[str, Any]]] = None,
-    cache_db: Optional[CacheDB] = None
+    cache_db: Optional[CacheDB] = None,
+    include_patient_info: bool = True
 ) -> str:
     """
     Generate HTML summary similar to the attached image format.
@@ -2278,200 +3042,11 @@ def generate_html_summary(
     }
     t = labels.get(language, labels['zh'])
     
-    # Debug: Print what patient_info contains
-    print(f"[DEBUG] generate_html_summary: patient_info keys = {list(patient_info.keys())}")
-    print(f"[DEBUG] generate_html_summary: patient_info = {patient_info}")
-    
-    # Patient info section - Display detailed patient info first, then 4 key items
-    # 患者信息部分 - 先显示详细患者信息，再显示4项关键信息
-    patient_info_html = f"""
-    <div class="patient-info">
-        <h2>{t['patient_info']}</h2>
-        <ul class="patient-details">
-    """
-    
-    # Detailed patient information / 详细患者信息（在前）
-    # Age
-    age_val = patient_info.get("age")
-    if age_val is not None and age_val != "":
-        gender_display = patient_info.get("gender_display") or patient_info.get("gender") or ""
-        gender_identity = patient_info.get("gender_identity") or ""
-        gender_text = ""
-        if gender_display:
-            gender_text = f", {gender_display}"
-        elif gender_display := patient_info.get("gender"):
-            gender_lower = str(gender_display).lower().strip()
-            if gender_lower in ["male", "m", "男"]:
-                gender_text = f", {t['male']}"
-            elif gender_lower in ["female", "f", "女"]:
-                gender_text = f", {t['female']}"
-        
-        gender_identity_text = ""
-        if gender_identity:
-            gender_identity_text = f" ({gender_identity})"
-        
-        age_suffix = t['years_old'] if language == 'zh' else ' years old'
-        age_label = "年龄" if language == 'zh' else "Age"
-        patient_info_html += f'<li><strong>{age_label}:</strong> {age_val}{age_suffix}{gender_text}{gender_identity_text}</li>'
-    
-    # Weight and Height
-    weight_val = patient_info.get("weight")
-    height_val = patient_info.get("height")
-    if weight_val is not None and weight_val != "" and height_val is not None and height_val != "":
-        patient_info_html += f'<li><strong>{t["weight"]}:</strong> {weight_val}kg, <strong>{t["height"]}:</strong> {height_val}cm</li>'
-    elif weight_val is not None and weight_val != "":
-        patient_info_html += f'<li><strong>{t["weight"]}:</strong> {weight_val}kg</li>'
-    elif height_val is not None and height_val != "":
-        patient_info_html += f'<li><strong>{t["height"]}:</strong> {height_val}cm</li>'
-    
-    # BMI
-    bmi_val = patient_info.get("bmi")
-    if bmi_val is not None and bmi_val != "":
-        patient_info_html += f'<li><strong>BMI:</strong> {bmi_val}</li>'
-    
-    # Diagnoses (from diagnoses_display) - Keep this
-    diagnoses = patient_info.get("diagnoses")
-    if diagnoses and str(diagnoses).strip():
-        diagnoses_label = "诊断" if language == 'zh' else "Diagnoses"
-        patient_info_html += f'<li><strong>{diagnoses_label}:</strong> {html.escape(str(diagnoses))}</li>'
-    
-    # Ethnicity
-    ethnicity = patient_info.get("ethnicity")
-    if ethnicity and str(ethnicity).strip():
-        patient_info_html += f'<li><strong>{t["ethnicity"]}:</strong> {html.escape(str(ethnicity))}</li>'
-    
-    # Region
-    region = patient_info.get("region")
-    if region and str(region).strip():
-        patient_info_html += f'<li><strong>{t["region"]}:</strong> {html.escape(str(region))}</li>'
-    
-    # Exercise intensity
-    exercise = patient_info.get("exercise_intensity")
-    if exercise and str(exercise).strip():
-        patient_info_html += f'<li><strong>{t["exercise_intensity"]}:</strong> {html.escape(str(exercise))}</li>'
-    
-    # Medications
-    medications = patient_info.get("medications")
-    if medications and str(medications).strip():
-        patient_info_html += f'<li><strong>{t["medications"]}:</strong> {html.escape(str(medications))}</li>'
-    
-    # Check if we have detailed info
-    has_detailed_info = any([age_val, weight_val, height_val, bmi_val, diagnoses, ethnicity, region, exercise, medications])
-    
-    # 3 key items / 3项关键信息（在后）
-    biggest_problem = patient_info.get("biggest_medical_problem")
-    nutrition_goals = patient_info.get("nutrition_behavioral_goals")
-    nutrition_assessment = patient_info.get("nutrition_assessment")
-    # 1. Biggest medical problem / 最大医疗问题
-    if biggest_problem and str(biggest_problem).strip():
-        label = "主要医疗问题" if language == 'zh' else "Primary Medical Problem"
-        problem_text = str(biggest_problem).strip()
-        # Format with proper line breaks / 格式化，使用适当的换行
-        formatted_problem = format_text_with_line_breaks(problem_text)
-        patient_info_html += f'<li><strong>{label}:</strong><br>{formatted_problem}</li>'
-    
-    # 2. Nutrition behavioral goals / 营养行为目标
-    if nutrition_goals and str(nutrition_goals).strip():
-        label = "营养行为目标" if language == 'zh' else "Nutrition Behavioral Goals"
-        goals_text = str(nutrition_goals).strip()
-        
-        # Format goals in a structured way / 格式化目标为结构化显示
-        formatted_goals = format_nutrition_goals(goals_text, language)
-        
-        patient_info_html += f'<li><strong>{label}:</strong><br>{formatted_goals}</li>'
-    
-    # 3. Initial nutrition assessment / 初始营养评估
-    if nutrition_assessment and str(nutrition_assessment).strip():
-        label = "初始营养评估" if language == 'zh' else "Initial Nutrition Assessment"
-        assessment_text = str(nutrition_assessment).strip()
-        # Format with proper line breaks, no truncation / 格式化，使用适当的换行，不截断
-        formatted_assessment = format_text_with_line_breaks(assessment_text)
-        patient_info_html += f'<li><strong>{label}:</strong><br>{formatted_assessment}</li>'
-    
-    # If no info found, show a message
-    has_key_items = any([biggest_problem, nutrition_goals, nutrition_assessment])
-    if not has_detailed_info and not has_key_items:
-        no_info_msg = "暂无患者信息" if language == 'zh' else "No patient information available"
-        patient_info_html += f'<li style="color: #999; font-style: italic;">{no_info_msg}</li>'
-    
-    patient_info_html += """
-        </ul>
-    """
-    
-    # Add care notes section if available
-    # 如果可用，添加 care notes 部分
-    if care_notes and len(care_notes) > 0:
-        care_notes_label = "Care Notes" if language == 'en' else "Care Notes"
-        view_details_text = "查看详情" if language == 'zh' else "View Details"
-        patient_info_html += f"""
-        <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #e0e0e0;">
-            <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px; color: #2c3e50;">{care_notes_label}</h3>
-            <div style="max-height: 300px; overflow-y: auto;">
-        """
-        
-        for index, note in enumerate(care_notes):
-            # Get full note text for summary
-            full_note_text = ''
-            if note.get('note'):
-                full_note_text = note['note']
-            elif note.get('content'):
-                full_note_text = note['content']
-            elif note.get('text'):
-                full_note_text = note['text']
-            else:
-                # Show all fields if no specific note field
-                fields = []
-                for key, value in note.items():
-                    if key not in ['_id', 'memberId', 'patient_id']:
-                        if isinstance(value, (dict, list)):
-                            fields.append(f"{key}: {json.dumps(value, ensure_ascii=False)}")
-                        else:
-                            fields.append(f"{key}: {value}")
-                full_note_text = ', '.join(fields) if fields else 'No content'
-            
-            # Create summary (first 100 characters)
-            summary = full_note_text[:100] + '...' if len(full_note_text) > 100 else full_note_text
-            
-            # Format date if available
-            date_str = ''
-            if note.get('createdAt'):
-                try:
-                    if isinstance(note['createdAt'], str):
-                        date_obj = datetime.fromisoformat(note['createdAt'].replace('Z', '+00:00'))
-                    else:
-                        date_obj = note['createdAt']
-                    date_str = date_obj.strftime('%Y-%m-%d')
-                except:
-                    date_str = str(note.get('createdAt', ''))
-            
-            # Create link to view full note
-            note_id = str(note.get('_id', index))
-            
-            patient_info_html += f"""
-            <div style="margin: 8px 0; padding: 8px; background: #f8f9fa; border-left: 3px solid #4a90e2; border-radius: 4px;">
-                {f'<div style="font-size: 11px; color: #999; margin-bottom: 4px;">{html.escape(date_str)}</div>' if date_str else ''}
-                <div style="font-size: 13px; color: #333; margin-bottom: 6px;">{html.escape(summary)}</div>
-                <a href="/care-note/{html.escape(str(patient_id))}/{html.escape(note_id)}" target="_blank" style="font-size: 12px; color: #4a90e2; text-decoration: none; font-weight: 600;">{view_details_text} →</a>
-            </div>
-            """
-        
-        patient_info_html += """
-            </div>
-        </div>
-        """
-    elif care_notes is not None:
-        # Show message if no care notes
-        no_care_notes_text = "暂无Care Notes" if language == 'zh' else "No Care Notes"
-        patient_info_html += f"""
-        <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #e0e0e0;">
-            <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px; color: #2c3e50;">Care Notes</h3>
-            <div style="color: #999; font-style: italic;">{no_care_notes_text}</div>
-        </div>
-        """
-    
-    patient_info_html += """
-    </div>
-    """
+    # Patient info section: use shared builder when included, else empty (shown on main page instead)
+    if include_patient_info:
+        patient_info_html = build_patient_info_html(patient_info, patient_id, language, care_notes)
+    else:
+        patient_info_html = ""
     
     # Title based on language
     if language == 'zh':
@@ -2958,12 +3533,14 @@ body {{
   line-height: 1.6;
 }}
 .container {{
-  max-width: 1400px;
+  max-width: 100%;
+  width: 100%;
   margin: 0 auto;
   background: white;
   border-radius: 12px;
   padding: 40px;
   box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+  box-sizing: border-box;
 }}
 .header {{
   text-align: center;
@@ -2980,7 +3557,7 @@ body {{
 }}
 .content {{
   display: grid;
-  grid-template-columns: 350px 1fr;
+  grid-template-columns: 1fr;
   gap: 40px;
   margin-top: 30px;
 }}
@@ -2990,6 +3567,7 @@ body {{
   border-radius: 10px;
   height: fit-content;
   box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+  max-width: 100%;
 }}
 .patient-info h2 {{
   margin-top: 0;
@@ -3017,6 +3595,8 @@ body {{
 }}
 .food-log-summary {{
   padding: 0;
+  min-width: 0;
+  width: 100%;
 }}
 .food-log-summary h2 {{
   margin-top: 0;

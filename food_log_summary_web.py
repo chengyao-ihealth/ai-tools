@@ -9,6 +9,7 @@ Interactive web application to generate food log summaries with patient ID and d
 import os
 import sys
 import json
+import html
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -33,6 +34,7 @@ except ImportError:
 from query_food_logs import get_mongo_client, query_food_logs
 from generate_food_log_summary import (
     get_patient_info,
+    build_patient_info_html,
     get_food_log_image_urls,
     group_food_logs_by_meal,
     generate_html_summary,
@@ -300,6 +302,289 @@ def get_care_notes(
         return []
 
 
+def _serialize_docs(docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Convert MongoDB docs to JSON-serializable dicts (ObjectId, datetime)."""
+    result = []
+    for doc in docs:
+        d = {}
+        for key, value in doc.items():
+            if isinstance(value, ObjectId):
+                d[key] = str(value)
+            elif isinstance(value, datetime):
+                d[key] = value.isoformat()
+            else:
+                d[key] = value
+        result.append(d)
+    return result
+
+
+def _patient_query(member_id, patient_id: str) -> Dict[str, Any]:
+    """Query filter for memberId, patient_id, patientId, member_id (ObjectId or string)."""
+    return {
+        "$or": [
+            {"memberId": member_id},
+            {"memberId": patient_id},
+            {"patient_id": member_id},
+            {"patient_id": patient_id},
+            {"patientId": member_id},
+            {"patientId": patient_id},
+            {"member_id": member_id},
+            {"member_id": patient_id},
+        ]
+    }
+
+
+def get_behavior_goals(
+    client: MongoClient,
+    patient_id: str,
+    database_name: str = "UnifiedCare"
+) -> List[Dict[str, Any]]:
+    """
+    Get behavior goals from uc_behavior_goals for a patient.
+    Reference: agent-service BehaviorGoal model - the document _id IS the patient ID (one doc per patient).
+    """
+    db = client[database_name]
+    try:
+        collection = db["uc_behavior_goals"]
+        try:
+            doc_id = ObjectId(patient_id)
+        except Exception:
+            doc_id = patient_id
+        doc = collection.find_one({"_id": doc_id})
+        if doc:
+            return _serialize_docs([doc])
+        docs = list(collection.find(_patient_query(doc_id if isinstance(doc_id, ObjectId) else doc_id, patient_id)).sort([("updatedAt", -1), ("createdAt", -1)]))
+        return _serialize_docs(docs)
+    except Exception as e:
+        print(f"[WARN] Failed to get behavior goals for patient {patient_id}: {e}", file=sys.stderr)
+        return []
+
+
+def get_monthly_reviews(
+    client: MongoClient,
+    patient_id: str,
+    database_name: str = "UnifiedCare"
+) -> List[Dict[str, Any]]:
+    """Get monthly reviews from uc_monthly_review for a patient."""
+    db = client[database_name]
+    try:
+        try:
+            member_id = ObjectId(patient_id)
+        except Exception:
+            member_id = patient_id
+        collection = db["uc_monthly_review"]
+        docs = list(collection.find(_patient_query(member_id, patient_id)).sort([("updatedAt", -1), ("createdAt", -1)]))
+        return _serialize_docs(docs)
+    except Exception as e:
+        print(f"[WARN] Failed to get monthly reviews for patient {patient_id}: {e}", file=sys.stderr)
+        return []
+
+
+def get_clinical_goals(
+    client: MongoClient,
+    patient_id: str,
+    database_name: str = "UnifiedCare"
+) -> List[Dict[str, Any]]:
+    """
+    Get clinical goals from uc_clinical_goals for a patient.
+    Reference: agent-service ClinicGoal model - the document _id IS the patient ID (one doc per patient).
+    """
+    db = client[database_name]
+    try:
+        collection = db["uc_clinical_goals"]
+        try:
+            doc_id = ObjectId(patient_id)
+        except Exception:
+            doc_id = patient_id
+        doc = collection.find_one({"_id": doc_id})
+        if doc:
+            return _serialize_docs([doc])
+        docs = list(collection.find(_patient_query(doc_id if isinstance(doc_id, ObjectId) else doc_id, patient_id)).sort([("updatedAt", -1), ("createdAt", -1)]))
+        return _serialize_docs(docs)
+    except Exception as e:
+        print(f"[WARN] Failed to get clinical goals for patient {patient_id}: {e}", file=sys.stderr)
+        return []
+
+
+def get_lifestyle_assessments(
+    client: MongoClient,
+    patient_id: str,
+    database_name: str = "UnifiedCare"
+) -> List[Dict[str, Any]]:
+    """
+    Get lifestyle assessment from uc_lifestyle_assessments for a patient.
+    Reference: agent-service LifestyleAssessment model - the document _id IS the patient ID (one doc per patient).
+    """
+    db = client[database_name]
+    try:
+        collection = db["uc_lifestyle_assessments"]
+        try:
+            doc_id = ObjectId(patient_id)
+        except Exception:
+            doc_id = patient_id
+        doc = collection.find_one({"_id": doc_id})
+        if doc:
+            return _serialize_docs([doc])
+        docs = list(collection.find(_patient_query(doc_id if isinstance(doc_id, ObjectId) else doc_id, patient_id)).sort([("updatedAt", -1), ("createdAt", -1)]))
+        return _serialize_docs(docs)
+    except Exception as e:
+        print(f"[WARN] Failed to get lifestyle assessments for patient {patient_id}: {e}", file=sys.stderr)
+        return []
+
+
+def get_nutritions(
+    client: MongoClient,
+    patient_id: str,
+    database_name: str = "UnifiedCare"
+) -> List[Dict[str, Any]]:
+    """Get nutrition records from uc_nutritions for a patient. Query by _id first (matching agent-service Dietary.get())."""
+    db = client[database_name]
+    try:
+        collection = db["uc_nutritions"]
+        # Try _id first (agent-service uses Dietary.get(patient_id) which queries by _id)
+        try:
+            query_id = ObjectId(patient_id)
+            doc = collection.find_one({"_id": query_id})
+            if doc:
+                return _serialize_docs([doc])
+        except Exception:
+            pass
+        # Fallback to memberId/patient_id query
+        try:
+            member_id = ObjectId(patient_id)
+        except Exception:
+            member_id = patient_id
+        docs = list(collection.find(_patient_query(member_id, patient_id)).sort([("updatedAt", -1), ("createdAt", -1)]))
+        return _serialize_docs(docs)
+    except Exception as e:
+        print(f"[WARN] Failed to get nutritions for patient {patient_id}: {e}", file=sys.stderr)
+        return []
+
+
+def _datetime_to_unix100ns(dt: datetime) -> int:
+    """Convert datetime to Unix timestamp in 100-nanosecond units (matching agent-service generate_timestamp_range)."""
+    unix_seconds = int(dt.timestamp())
+    unix_100ns = unix_seconds * 10**7 + dt.microsecond * 10
+    return unix_100ns
+
+
+def get_patient_channels(
+    client: MongoClient,
+    patient_id: str,
+    database_name: str = "UnifiedCare"
+) -> List[str]:
+    """Get all chat channels associated with a patient, including default 'new-{patient_id}' channel (matching agent-service)."""
+    db = client[database_name]
+    try:
+        collection = db["chatChannelOffset"]
+        # Query by patientId (agent-service uses string patient_id)
+        docs = list(collection.find({"patientId": patient_id}, {"channel": 1, "_id": 0}))
+        channels = set(doc.get("channel") for doc in docs if doc.get("channel"))
+        # If no docs, try patientId as ObjectId (some DBs store it as ObjectId)
+        if not channels:
+            try:
+                oid = ObjectId(patient_id)
+                docs = list(collection.find({"patientId": oid}, {"channel": 1, "_id": 0}))
+                channels = set(doc.get("channel") for doc in docs if doc.get("channel"))
+            except Exception:
+                pass
+        # Add default channel 'new-{patient_id}' (matching agent-service)
+        channels.add(f"new-{patient_id}")
+        return list(channels)
+    except Exception as e:
+        print(f"[WARN] Failed to get channels for patient {patient_id}: {e}", file=sys.stderr)
+        return [f"new-{patient_id}"]
+
+
+# Chat message exclusion filter (matching agent-service chat_messages_service.CHAT_MESSAGE_EXCLUSION_FILTER)
+CHAT_MESSAGE_EXCLUSION_FILTER = {
+    "$or": [
+        {"payload.type": {"$ne": "text"}},
+        {"payload.text": {"$exists": False}},
+        {"payload.text": ""},
+        {"payload.userRole": {"$regex": r"^admin$", "$options": "i"}}
+    ]
+}
+
+
+def get_chat_messages(
+    client: MongoClient,
+    patient_id: str,
+    database_name: str = "UnifiedCare",
+    limit: int = 100,
+    days_back: Optional[int] = None,
+    before_timestamp: Optional[int] = None
+) -> List[Dict[str, Any]]:
+    """Get chat messages for a patient (matching agent-service: Unix 100ns timestamp, $nor exclusion).
+    If before_timestamp is set, return messages older than that (for 'Load more' pagination)."""
+    db = client[database_name]
+    try:
+        channels = get_patient_channels(client, patient_id, database_name)
+        if not channels:
+            return []
+        collection = db["chatMessages"]
+        query = {
+            "channel": {"$in": channels},
+            "$nor": CHAT_MESSAGE_EXCLUSION_FILTER["$or"]
+        }
+        ts_cond = {}
+        if days_back is not None and days_back > 0:
+            cutoff_time = datetime.utcnow() - timedelta(days=days_back)
+            ts_cond["$gte"] = _datetime_to_unix100ns(cutoff_time)
+        if before_timestamp is not None:
+            ts_cond["$lt"] = before_timestamp
+        if ts_cond:
+            query["timestamp"] = ts_cond
+        cursor = collection.find(query).sort("timestamp", -1).limit(limit)
+        messages = list(cursor)
+        messages.reverse()
+        return _serialize_docs(messages)
+    except Exception as e:
+        print(f"[WARN] Failed to get chat messages for patient {patient_id}: {e}", file=sys.stderr)
+        return []
+
+
+def get_pre_visit_summary_history(
+    patient_id: str,
+    limit: int = 10
+) -> List[Dict[str, Any]]:
+    """Get pre-visit summary history from MySQL (pre_visit_summary_history table)."""
+    mysql_url = os.getenv("MYSQL_DATABASE_URL", "").strip()
+    if not mysql_url:
+        return []
+    try:
+        from sqlalchemy import create_engine, text
+        # Use pymysql for sync (MYSQL_DATABASE_URL uses aiomysql for async)
+        sync_url = mysql_url.replace("mysql+aiomysql", "mysql+pymysql")
+        engine = create_engine(sync_url)
+        with engine.connect() as conn:
+            safe_limit = max(1, min(int(limit), 50))
+            result = conn.execute(
+                text(
+                    "SELECT id, patient_id, full_summary, generation_time "
+                    "FROM pre_visit_summary_history WHERE patient_id = :pid "
+                    f"ORDER BY generation_time DESC LIMIT {safe_limit}"
+                ),
+                {"pid": patient_id}
+            )
+            rows = result.fetchall()
+        records = []
+        for row in rows:
+            records.append({
+                "id": row[0],
+                "patient_id": row[1],
+                "full_summary": row[2] or "",
+                "generation_time": row[3].strftime("%Y-%m-%d %H:%M:%S") if row[3] else ""
+            })
+        return records
+    except ImportError:
+        print("[WARN] pymysql/sqlalchemy not installed. Pre-visit summary history disabled.", file=sys.stderr)
+        return []
+    except Exception as e:
+        print(f"[WARN] Failed to get pre_visit_summary_history for patient {patient_id}: {e}", file=sys.stderr)
+        return []
+
+
 def get_care_note_by_id(
     client: MongoClient,
     patient_id: str,
@@ -360,6 +645,36 @@ def get_care_note_by_id(
         return None
     except Exception as e:
         print(f"[WARN] Failed to get care note {note_id} for patient {patient_id}: {e}", file=sys.stderr)
+        return None
+
+
+def get_monthly_review_by_id(
+    client: MongoClient,
+    patient_id: str,
+    note_id: str,
+    database_name: str = "UnifiedCare"
+) -> Optional[Dict[str, Any]]:
+    """Get a single monthly review by ID for a patient from uc_monthly_review."""
+    db = client[database_name]
+    collection = db["uc_monthly_review"]
+    try:
+        try:
+            member_id = ObjectId(patient_id)
+        except Exception:
+            member_id = patient_id
+        try:
+            note_obj_id = ObjectId(note_id)
+        except Exception:
+            note_obj_id = note_id
+        note = collection.find_one({"_id": note_obj_id})
+        if note:
+            if (str(note.get("memberId", "")) == str(member_id) or
+                str(note.get("patient_id", "")) == str(member_id) or
+                str(note.get("_id", "")) == str(member_id)):
+                return _serialize_docs([note])[0]
+        return None
+    except Exception as e:
+        print(f"[WARN] Failed to get monthly review {note_id} for patient {patient_id}: {e}", file=sys.stderr)
         return None
 
 
@@ -517,7 +832,8 @@ HTML_TEMPLATE = r"""
         }
         .result-frame {
             width: 100%;
-            height: 800px;
+            min-height: calc(100vh - 260px);
+            height: calc(100vh - 260px);
             border: 1px solid #e0e0e0;
             border-radius: 6px;
         }
@@ -537,6 +853,24 @@ HTML_TEMPLATE = r"""
             font-size: 13px;
             color: #666;
         }
+        #patientInfoDetail.patient-info-detail {
+            padding-top: 10px;
+            border-top: 1px solid #e0e0e0;
+        }
+        #patientInfoDetail .patient-info {
+            background: transparent;
+            padding: 0;
+        }
+        #patientInfoDetail .patient-info h2 {
+            font-size: 16px;
+            margin: 0 0 10px 0;
+            color: #2c3e50;
+        }
+        #patientInfoDetail .patient-details {
+            margin: 0;
+            padding-left: 20px;
+            font-size: 13px;
+        }
     </style>
 </head>
 <body>
@@ -555,6 +889,7 @@ HTML_TEMPLATE = r"""
                     <div id="latestDateLabel">最晚日期: <span id="latestDate">-</span></div>
                     <div id="topDaysLabel" style="margin-top: 10px; font-weight: 600;">日志数量最多的五天:</div>
                     <div id="topDaysList" style="margin-left: 10px; margin-top: 5px;"></div>
+                    <div id="patientInfoDetail" class="patient-info-detail" style="margin-top: 15px; display: none;"></div>
                 </div>
                 <div class="patient-info-display" id="careNotesInfo" style="display: none; margin-top: 15px;">
                     <div id="careNotesLabel" style="font-weight: 600; margin-bottom: 8px;">Care Notes:</div>
@@ -876,6 +1211,7 @@ HTML_TEMPLATE = r"""
                 earliestDate: 'Earliest Date:',
                 latestDate: 'Latest Date:',
                 topDays: 'Top 5 Days with Most Logs:',
+                patientInfoSection: 'Patient Information',
                 careNotes: 'Care Notes:',
                 noCareNotes: 'No Care Notes',
                 pleaseSelect: 'Please select Patient ID...',
@@ -1098,6 +1434,19 @@ HTML_TEMPLATE = r"""
                                 const noDataText = t.noData;
                                 topDaysList.innerHTML = `<div style="color: #999;">${noDataText}</div>`;
                             }
+                            // Re-fetch Patient Information in new language
+                            const patientInfoDetail = document.getElementById('patientInfoDetail');
+                            if (patientInfoDetail) {
+                                fetch('/api/patient-info-html?patient_id=' + encodeURIComponent(patientId) + '&language=' + (currentLang || 'zh'))
+                                    .then(res => res.ok ? res.json() : Promise.reject(new Error('Failed to load patient info')))
+                                    .then(data => {
+                                        if (data.html) {
+                                            patientInfoDetail.innerHTML = data.html;
+                                            patientInfoDetail.style.display = 'block';
+                                        }
+                                    })
+                                    .catch(() => {});
+                            }
                         }
                     }
                 }
@@ -1239,9 +1588,32 @@ HTML_TEMPLATE = r"""
                             }
                             
                             document.getElementById('patientInfo').style.display = 'block';
+                            // Fetch and show Patient Information (detailed) below Top 5 Days
+                            const patientInfoDetail = document.getElementById('patientInfoDetail');
+                            if (patientInfoDetail) {
+                                patientInfoDetail.style.display = 'block';
+                                patientInfoDetail.innerHTML = '<div style="color:#666; padding:10px;">' + (currentLang === 'zh' ? '加载患者信息中...' : 'Loading patient information...') + '</div>';
+                                fetch('/api/patient-info-html?patient_id=' + encodeURIComponent(option.value) + '&language=' + (currentLang || 'zh'))
+                                    .then(res => res.ok ? res.json() : Promise.reject(new Error('Failed to load patient info')))
+                                    .then(data => {
+                                        if (data.html) {
+                                            patientInfoDetail.innerHTML = data.html;
+                                        } else {
+                                            patientInfoDetail.innerHTML = '<div style="color:#999;">' + (currentLang === 'zh' ? '暂无患者详细信息' : 'No patient details') + '</div>';
+                                        }
+                                    })
+                                    .catch(() => {
+                                        patientInfoDetail.innerHTML = '<div style="color:#c33;">' + (currentLang === 'zh' ? '无法加载患者详细信息，请稍后重试' : 'Failed to load patient details. Please try again.') + '</div>';
+                                    });
+                            }
                         } else {
                             document.getElementById('patientInfo').style.display = 'none';
                             document.getElementById('careNotesInfo').style.display = 'none';
+                            const patientInfoDetail = document.getElementById('patientInfoDetail');
+                            if (patientInfoDetail) {
+                                patientInfoDetail.innerHTML = '';
+                                patientInfoDetail.style.display = 'none';
+                            }
                         }
                     };
                     
@@ -1522,7 +1894,8 @@ HTML_TEMPLATE = r"""
                     date: date,
                     language: currentLang,
                     debug: debugMode,
-                    regenerate: regenerate
+                    regenerate: regenerate,
+                    include_patient_info: false
                     })
                 });
                 
@@ -1982,6 +2355,78 @@ def api_patient_ids():
         }), 500
 
 
+@app.route('/api/patient-info-html')
+def api_patient_info_html():
+    """API endpoint to get Patient Information HTML for the selected patient (for display below Top 5 Days)."""
+    try:
+        patient_id = request.args.get('patient_id')
+        language = request.args.get('language', 'zh')
+        if not patient_id:
+            return jsonify({"error": "patient_id is required"}), 400
+        client = get_mongo_client(MONGO_URI)
+        try:
+            patient_info = get_patient_info(client, patient_id, DATABASE_NAME)
+            care_notes = get_care_notes(client, patient_id, DATABASE_NAME)
+            try:
+                behavior_goals = get_behavior_goals(client, patient_id, DATABASE_NAME)
+            except Exception:
+                behavior_goals = []
+            try:
+                monthly_reviews = get_monthly_reviews(client, patient_id, DATABASE_NAME)
+            except Exception:
+                monthly_reviews = []
+            try:
+                clinical_goals = get_clinical_goals(client, patient_id, DATABASE_NAME)
+            except Exception:
+                clinical_goals = []
+            try:
+                lifestyle_assessments = get_lifestyle_assessments(client, patient_id, DATABASE_NAME)
+            except Exception:
+                lifestyle_assessments = []
+            try:
+                nutritions = get_nutritions(client, patient_id, DATABASE_NAME)
+            except Exception:
+                nutritions = []
+            try:
+                # Get recent chat messages (last 90 days, max 50 messages for summary)
+                # Use 90 days instead of 30 to capture more history
+                chat_messages = get_chat_messages(client, patient_id, DATABASE_NAME, limit=50, days_back=90)
+            except Exception as e:
+                print(f"[WARN] Failed to get chat messages: {e}", file=sys.stderr)
+                chat_messages = []
+            try:
+                pre_visit_history = get_pre_visit_summary_history(patient_id, limit=10)
+            except Exception:
+                pre_visit_history = []
+            try:
+                html_content = build_patient_info_html(
+                    patient_info, patient_id, language,
+                    care_notes=care_notes,
+                    behavior_goals=behavior_goals or [],
+                    monthly_reviews=monthly_reviews or [],
+                    clinical_goals=clinical_goals or [],
+                    lifestyle_assessments=lifestyle_assessments or [],
+                    nutritions=nutritions or [],
+                    chat_messages=chat_messages or [],
+                    pre_visit_history=pre_visit_history or []
+                )
+            except Exception as build_err:
+                import traceback
+                traceback.print_exc()
+                err_msg = str(build_err)
+                html_content = (
+                    f'<div class="patient-info"><h2>{("患者信息" if language == "zh" else "Patient Information")}</h2>'
+                    f'<p style="color:#c33;">{("加载详细失败: " if language == "zh" else "Failed to load details: ")}{html.escape(err_msg)}</p></div>'
+                )
+            return jsonify({"success": True, "html": html_content})
+        finally:
+            client.close()
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/api/generate-summary', methods=['POST'])
 def api_generate_summary():
     """API endpoint to generate food log summary."""
@@ -1992,6 +2437,7 @@ def api_generate_summary():
         language = data.get('language', 'zh')  # Default to Chinese
         debug = data.get('debug', False)
         regenerate = data.get('regenerate', False)  # Regenerate AI content and update cache
+        include_patient_info = data.get('include_patient_info', False)  # Patient info shown on main page, not in Daily Summary
         
         if not patient_id or not date_str:
             return jsonify({"error": "Missing patient_id or date"}), 400
@@ -2215,7 +2661,7 @@ def api_generate_summary():
                     "has_food_logs": has_food_logs  # Flag indicating if food logs exist
                 }
             
-            # Generate HTML (use data URI for images in iframe)
+            # Generate HTML (use data URI for images in iframe; patient info is shown on main page, not in summary)
             html_content = generate_html_summary(
                 patient_info,
                 food_logs_by_meal,
@@ -2225,9 +2671,10 @@ def api_generate_summary():
                 use_data_uri=True,  # Use data URI for iframe compatibility
                 image_base_url=None,
                 language=language,
-                care_notes=care_notes,  # Pass care notes to include in Patient Information section
-                meal_summaries=meal_summaries,  # Pass meal summaries for display
-                cache_db=cache_db  # Pass cache database for image caching
+                care_notes=care_notes,
+                meal_summaries=meal_summaries,
+                cache_db=cache_db,
+                include_patient_info=include_patient_info
             )
             
             client.close()
@@ -2886,6 +3333,372 @@ def care_note_detail(patient_id, note_id):
         <body>
             <h1 class="error">Error</h1>
             <p>{str(e)}</p>
+            <a href="/">← Back to Home</a>
+        </body>
+        </html>
+        """), 500
+
+
+@app.route('/monthly-review/<patient_id>/<note_id>')
+def monthly_review_detail(patient_id, note_id):
+    """Display detailed monthly review page (same style as Care Note details)."""
+    try:
+        client = get_mongo_client(MONGO_URI)
+        note = get_monthly_review_by_id(client, patient_id, note_id, DATABASE_NAME)
+        if not note and note_id.isdigit():
+            all_reviews = get_monthly_reviews(client, patient_id, DATABASE_NAME)
+            try:
+                index = int(note_id)
+                if 0 <= index < len(all_reviews):
+                    note = all_reviews[index]
+            except (ValueError, IndexError):
+                pass
+        client.close()
+        if not note:
+            return render_template_string("""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="utf-8">
+                <title>Monthly Review Not Found</title>
+                <style>
+                    body { font-family: Arial, sans-serif; margin: 40px; text-align: center; }
+                    .error { color: #d32f2f; }
+                </style>
+            </head>
+            <body>
+                <h1 class="error">Monthly Review Not Found</h1>
+                <p>The requested monthly review could not be found.</p>
+                <a href="/">← Back to Home</a>
+            </body>
+            </html>
+            """), 404
+        note_content = ''
+        for key in ['assessment', 'nutritionAssessment', 'initialAssessment', 'summary', 'notes', 'note', 'content', 'text']:
+            val = note.get(key)
+            if val is not None and str(val).strip():
+                note_content = str(val) if not isinstance(val, (dict, list)) else json.dumps(val, indent=2, ensure_ascii=False)
+                break
+        if not note_content:
+            fields = []
+            for key, value in note.items():
+                if key not in ['_id', 'memberId', 'patient_id']:
+                    if isinstance(value, (dict, list)):
+                        fields.append(f"<strong>{key}:</strong> {json.dumps(value, indent=2, ensure_ascii=False, default=str)}")
+                    else:
+                        fields.append(f"<strong>{key}:</strong> {html.escape(str(value))}")
+            note_content = '<br>'.join(fields) if fields else 'No content'
+        display_content = note_content if (isinstance(note_content, str) and note_content.strip().startswith('<')) else html.escape(note_content)
+        date_str = ''
+        if note.get('createdAt'):
+            try:
+                d = note['createdAt']
+                if isinstance(d, str):
+                    date_str = datetime.fromisoformat(d.replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M:%S')
+                else:
+                    date_str = d.strftime('%Y-%m-%d %H:%M:%S')
+            except Exception:
+                date_str = str(note.get('createdAt', ''))
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>Monthly Review Details</title>
+            <style>
+                body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, Helvetica, Arial, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; color: #333; }}
+                .container {{ max-width: 900px; margin: 0 auto; background: white; border-radius: 8px; padding: 30px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+                h1 {{ margin-top: 0; color: #2c3e50; border-bottom: 3px solid #17a2b8; padding-bottom: 15px; }}
+                .meta {{ color: #666; font-size: 14px; margin-bottom: 20px; padding-bottom: 15px; border-bottom: 1px solid #e0e0e0; }}
+                .content {{ font-size: 15px; line-height: 1.6; white-space: pre-wrap; word-wrap: break-word; }}
+                .back-link {{ display: inline-block; margin-top: 20px; color: #4a90e2; text-decoration: none; font-weight: 600; }}
+                .back-link:hover {{ text-decoration: underline; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>Monthly Review Details</h1>
+                <div class="meta">
+                    <strong>Patient ID:</strong> {html.escape(patient_id)}<br>
+                    {f'<strong>Date:</strong> {html.escape(date_str)}<br>' if date_str else ''}
+                    <strong>Review ID:</strong> {html.escape(note_id)}
+                </div>
+                <div class="content">{display_content}</div>
+                <a href="/" class="back-link">← Back to Home</a>
+            </div>
+        </body>
+        </html>
+        """
+        return render_template_string(html_content)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return render_template_string(f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <title>Error</title>
+            <style>
+                body {{ font-family: Arial, sans-serif; margin: 40px; }}
+                .error {{ color: #d32f2f; }}
+            </style>
+        </head>
+        <body>
+            <h1 class="error">Error</h1>
+            <p>{html.escape(str(e))}</p>
+            <a href="/">← Back to Home</a>
+        </body>
+        </html>
+        """), 500
+
+
+@app.route('/api/chat-history')
+def api_chat_history():
+    """JSON API for chat messages (for 'Load older' pagination). Returns messages older than before_timestamp."""
+    try:
+        patient_id = request.args.get('patient_id')
+        limit = request.args.get('limit', type=int, default=100)
+        days_back = request.args.get('days', type=int, default=30)
+        before_ts = request.args.get('before_timestamp', type=int, default=None)
+        if not patient_id:
+            return jsonify({"error": "patient_id required"}), 400
+        limit = max(1, min(limit, 500))
+        client = get_mongo_client(MONGO_URI)
+        try:
+            # Fetch limit+1 to determine has_more
+            msgs = get_chat_messages(
+                client, patient_id, DATABASE_NAME,
+                limit=limit + 1,
+                days_back=days_back if days_back > 0 else None,
+                before_timestamp=before_ts
+            )
+        finally:
+            client.close()
+        has_more = len(msgs) > limit
+        msgs = msgs[:limit]
+        out = []
+        for msg in msgs:
+            payload = msg.get("payload", {})
+            ts = msg.get("timestamp", 0)
+            try:
+                sec = ts // 10**7
+                dt = datetime.fromtimestamp(sec)
+                time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:
+                time_str = str(ts)
+            out.append({
+                "text": payload.get("text", ""),
+                "display_name": payload.get("displayName", payload.get("userRole", "")),
+                "user_role": payload.get("userRole", "unknown"),
+                "time_str": time_str,
+                "timestamp": ts
+            })
+        return jsonify({"messages": out, "has_more": has_more})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/chat-history/<patient_id>')
+def chat_history_page(patient_id):
+    """Display full chat history page for a patient. Default 100 messages for faster load; use Load more for older."""
+    try:
+        # Get parameters - default to smaller limit for faster initial load
+        days_back = request.args.get('days', type=int, default=30)
+        limit = request.args.get('limit', type=int, default=100)
+        
+        client = get_mongo_client(MONGO_URI)
+        try:
+            patient_info = get_patient_info(client, patient_id, DATABASE_NAME)
+            patient_name = patient_info.get('name', 'Unknown') if patient_info else 'Unknown'
+            
+            chat_messages = get_chat_messages(client, patient_id, DATABASE_NAME, limit=limit, days_back=days_back)
+        finally:
+            client.close()
+        
+        # Format messages for display
+        messages_html = ""
+        if chat_messages:
+            for msg in chat_messages:
+                payload = msg.get('payload', {})
+                text = payload.get('text', '')
+                user_role = payload.get('userRole', 'unknown')
+                display_name = payload.get('displayName', user_role)
+                timestamp = msg.get('timestamp', 0)
+                
+                # Convert timestamp (Unix 100-nanosecond units) to datetime (agent-service: seconds = ts // 10^7)
+                try:
+                    from datetime import datetime
+                    seconds = timestamp // 10**7
+                    dt = datetime.fromtimestamp(seconds)
+                    time_str = dt.strftime('%Y-%m-%d %H:%M:%S')
+                except Exception:
+                    time_str = str(timestamp)
+                
+                # Determine message style based on role
+                role_class = 'patient' if user_role == 'patient' else 'provider'
+                messages_html += f"""
+                <div class="message {role_class}" data-timestamp="{timestamp}">
+                    <div class="message-header">
+                        <span class="sender">{html.escape(display_name)}</span>
+                        <span class="timestamp">{html.escape(time_str)}</span>
+                    </div>
+                    <div class="message-text">{html.escape(text)}</div>
+                </div>
+                """
+        else:
+            messages_html = '<div class="no-data">No chat messages found.</div>'
+        
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>Chat History - {html.escape(patient_name)}</title>
+            <style>
+                body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, Helvetica, Arial, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; color: #333; }}
+                .container {{ max-width: 1000px; margin: 0 auto; background: white; border-radius: 8px; padding: 30px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+                h1 {{ margin-top: 0; color: #2c3e50; border-bottom: 3px solid #4a90e2; padding-bottom: 15px; }}
+                .meta {{ color: #666; font-size: 14px; margin-bottom: 20px; padding-bottom: 15px; border-bottom: 1px solid #e0e0e0; }}
+                .controls {{ margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-radius: 6px; }}
+                .controls label {{ margin-right: 10px; font-weight: 600; }}
+                .controls select, .controls input {{ margin-right: 15px; padding: 5px 10px; border: 1px solid #ddd; border-radius: 4px; }}
+                .controls button {{ padding: 6px 15px; background: #4a90e2; color: white; border: none; border-radius: 4px; cursor: pointer; }}
+                .controls button:hover {{ background: #357abd; }}
+                .messages {{ margin-top: 20px; }}
+                .message {{ margin-bottom: 15px; padding: 12px; border-radius: 8px; border-left: 4px solid #ddd; }}
+                .message.patient {{ background: #e3f2fd; border-left-color: #2196f3; }}
+                .message.provider {{ background: #f3e5f5; border-left-color: #9c27b0; }}
+                .message-header {{ display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 13px; }}
+                .sender {{ font-weight: 600; color: #2c3e50; }}
+                .timestamp {{ color: #999; }}
+                .message-text {{ font-size: 14px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }}
+                .no-data {{ text-align: center; padding: 40px; color: #999; font-style: italic; }}
+                .back-link {{ display: inline-block; margin-top: 20px; color: #4a90e2; text-decoration: none; font-weight: 600; }}
+                .back-link:hover {{ text-decoration: underline; }}
+                .load-more-btn {{ padding: 8px 16px; background: #4a90e2; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; }}
+                .load-more-btn:hover:not(:disabled) {{ background: #357abd; }}
+                .load-more-btn:disabled {{ opacity: 0.7; cursor: not-allowed; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>Chat History</h1>
+                <div class="meta">
+                    <strong>Patient:</strong> {html.escape(patient_name)} ({html.escape(patient_id)})<br>
+                    <strong>Showing:</strong> Last {days_back} days, up to {limit} messages
+                </div>
+                <div class="controls">
+                    <label for="daysSelect">Time Range:</label>
+                    <select id="daysSelect" onchange="updateTimeRange()">
+                        <option value="7" {"selected" if days_back == 7 else ""}>Last 7 days</option>
+                        <option value="30" {"selected" if days_back == 30 else ""}>Last 30 days</option>
+                        <option value="90" {"selected" if days_back == 90 else ""}>Last 90 days</option>
+                        <option value="180" {"selected" if days_back == 180 else ""}>Last 6 months</option>
+                        <option value="365" {"selected" if days_back == 365 else ""}>Last year</option>
+                        <option value="0">All time</option>
+                    </select>
+                    <label for="limitSelect">Max Messages:</label>
+                    <select id="limitSelect" onchange="updateTimeRange()">
+                        <option value="100" {"selected" if limit == 100 else ""}>100</option>
+                        <option value="500" {"selected" if limit == 500 else ""}>500</option>
+                        <option value="1000" {"selected" if limit == 1000 else ""}>1000</option>
+                        <option value="5000" {"selected" if limit == 5000 else ""}>5000</option>
+                    </select>
+                </div>
+                <div class="messages" id="chatMessagesWrap">
+                    {f'<div id="loadOlderWrap" style="text-align: center; margin-bottom: 15px;"><button type="button" id="loadOlderBtn" class="load-more-btn" data-patient-id="{html.escape(patient_id)}" data-days="{days_back}" data-limit="{limit}">Load older messages</button><span id="loadOlderSpinner" style="display: none; margin-left: 8px;">Loading...</span></div>' if chat_messages else ''}
+                    <div id="chatMessagesList">
+                        {messages_html}
+                    </div>
+                </div>
+                <a href="/" class="back-link">← Back to Home</a>
+            </div>
+            <script>
+                function updateTimeRange() {{
+                    const days = document.getElementById('daysSelect').value;
+                    const limit = document.getElementById('limitSelect').value;
+                    const url = new URL(window.location.href);
+                    if (days === '0') {{
+                        url.searchParams.delete('days');
+                    }} else {{
+                        url.searchParams.set('days', days);
+                    }}
+                    url.searchParams.set('limit', limit);
+                    window.location.href = url.toString();
+                }}
+                function escapeHtml(s) {{
+                    if (!s) return '';
+                    const d = document.createElement('div');
+                    d.textContent = s;
+                    return d.innerHTML;
+                }}
+                const loadOlderBtn = document.getElementById('loadOlderBtn');
+                if (loadOlderBtn) loadOlderBtn.addEventListener('click', async function() {{
+                    const btn = this;
+                    const spinner = document.getElementById('loadOlderSpinner');
+                    const list = document.getElementById('chatMessagesList');
+                    const messages = list.querySelectorAll('.message[data-timestamp]');
+                    let oldestTs = null;
+                    messages.forEach(function(el) {{
+                        const t = parseInt(el.getAttribute('data-timestamp'), 10);
+                        if (!isNaN(t) && (oldestTs === null || t < oldestTs)) oldestTs = t;
+                    }});
+                    if (oldestTs === null) return;
+                    btn.disabled = true;
+                    spinner.style.display = 'inline';
+                    try {{
+                        const params = new URLSearchParams({{
+                            patient_id: btn.getAttribute('data-patient-id'),
+                            limit: btn.getAttribute('data-limit') || '100',
+                            days: btn.getAttribute('data-days') || '30',
+                            before_timestamp: oldestTs
+                        }});
+                        const r = await fetch('/api/chat-history?' + params);
+                        const data = await r.json();
+                        if (data.messages && data.messages.length) {{
+                            data.messages.forEach(function(m) {{
+                                const roleClass = m.user_role === 'patient' ? 'patient' : 'provider';
+                                const div = document.createElement('div');
+                                div.className = 'message ' + roleClass;
+                                div.setAttribute('data-timestamp', m.timestamp);
+                                div.innerHTML = '<div class="message-header"><span class="sender">' + escapeHtml(m.display_name) + '</span><span class="timestamp">' + escapeHtml(m.time_str) + '</span></div><div class="message-text">' + escapeHtml(m.text) + '</div>';
+                                list.insertBefore(div, list.firstChild);
+                            }});
+                        }}
+                        if (!data.has_more) {{
+                            document.getElementById('loadOlderWrap').style.display = 'none';
+                        }}
+                    }} catch (e) {{
+                        console.error(e);
+                    }}
+                    btn.disabled = false;
+                    spinner.style.display = 'none';
+                }});
+            </script>
+        </body>
+        </html>
+        """
+        return render_template_string(html_content)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return render_template_string(f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <title>Error</title>
+            <style>
+                body {{ font-family: Arial, sans-serif; margin: 40px; }}
+                .error {{ color: #d32f2f; }}
+            </style>
+        </head>
+        <body>
+            <h1 class="error">Error</h1>
+            <p>{html.escape(str(e))}</p>
             <a href="/">← Back to Home</a>
         </body>
         </html>
